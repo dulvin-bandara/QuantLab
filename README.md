@@ -185,6 +185,13 @@ The portfolio is a broad index fund (IVV for the US, VAS.AX for the ASX) for abo
 invested money, up to six current ideas from the latest scan for the rest, and cash. Your
 target decides how much is invested rather than held as cash, up to 100%; it never borrows.
 
+Positions are in whole shares unless you tick **Allow fractional shares**, which sizes each
+holding to four decimal places so it matches its intended weight exactly. That matters most
+for small amounts, where a single share of an expensive stock would otherwise be left out.
+Fractions are only sold by some brokers, usually for US shares and often for market orders
+only, and rarely for ASX shares; a broker is suggested for a part-share order only if you
+marked it as offering fractions under My portfolio.
+
 The screen then says plainly whether the target is realistic, with an estimated chance of
 reaching it, the expected return and a likely range. Those figures rest on stated assumptions:
 cash earns the risk-free rate, the share market earns 5% a year more, and each holding moves

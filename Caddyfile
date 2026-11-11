@@ -1,7 +1,0 @@
-# Serves QuantLab at https://<QUANTLAB_DOMAIN>/ with automatic HTTPS.
-# Use a subdomain here, e.g. quantlab.example.com, pointed at this server with a DNS A record.
-# (To serve it under a path of a site hosted on this same server instead, see deploy/Caddyfile.path.)
-{$QUANTLAB_DOMAIN} {
-	encode gzip
-	reverse_proxy quantlab:8000
-}

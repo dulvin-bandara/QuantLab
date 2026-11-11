@@ -13,8 +13,8 @@ def _env(name: str, default: str) -> str:
 @dataclass
 class Settings:
     data_dir: Path = field(default_factory=lambda: Path(_env("DATA_DIR", "data")))
-    # When set, the web app requires this password. Always set it before
-    # exposing the app on a public domain.
+    # Optional: when set, the web app requires this password. Not needed for
+    # local use, where only this computer can reach the app.
     password: str = field(default_factory=lambda: _env("PASSWORD", ""))
     # Annual risk-free rates used for Sharpe ratios and option pricing.
     risk_free_usd: float = field(default_factory=lambda: float(_env("RISK_FREE_USD", "0.04")))

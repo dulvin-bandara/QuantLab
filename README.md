@@ -2,7 +2,7 @@
 
 A personal quant research platform for **US and ASX stocks and options**: live-ish market
 data, news sentiment, a machine-learning forecast, strategy backtesting, option analytics
-and a paper-trading account, all behind a web interface you can run locally or on your own domain.
+and a paper-trading account, all behind a web interface that runs on your own computer.
 
 Everything runs on free data (Yahoo Finance prices and option chains, Yahoo and Google News
 headlines). No API keys are needed, except for the optional assistant, which uses your own
@@ -116,60 +116,12 @@ filter, the API is allowed to retry it on a fallback model.
   against a live API key in development; conversations are kept only in the browser tab.
 - Prices are end-of-day or delayed; this is built for swing trading (days to weeks), not intraday.
 
-## Putting it on your own domain, privately
+## Running it
 
-QuantLab can live at a path such as `https://example.com/quantlab/` beside an existing website.
-Three things keep it private:
-
-- **Password login.** With `QUANTLAB_PASSWORD` set, every screen and every data request needs
-  a login. The session lasts 7 days and repeated wrong guesses are locked out for a few minutes.
-- **HTTPS.** The web server in front encrypts everything in transit, including the password.
-  Never expose the app over plain `http://`.
-- **Unlisted.** Nothing links to it, and every response tells search engines not to index it.
-  Treat this as tidiness, not security: the password is the protection.
-
-QuantLab is a Python program, so it needs a machine that can run it. A static host such as
-GitHub Pages cannot run it or forward a path to it, so the app runs on a small server of its
-own (any VPS with about 1 GB of memory and Docker) and your domain points at that server.
-
-### Recommended: a subdomain (works with GitHub Pages)
-
-Your main site stays exactly where it is. QuantLab gets `quantlab.example.com`.
-
-1. Rent a small VPS, install Docker, and clone this repository onto it.
-2. At your DNS provider, add an `A` record: host `quantlab`, answer = the server's IP address.
-   Leave the records that point the main domain at GitHub Pages untouched.
-3. On the server, create the settings file and fill in the subdomain and a strong password:
-
-   ```bash
-   cp .env.example .env
-   ```
-
-4. Start it:
-
-   ```bash
-   docker compose up -d --build
-   ```
-
-Caddy obtains the HTTPS certificate by itself once the DNS record has spread (usually minutes).
-
-### Optional: the exact path `example.com/quantlab`
-
-A path on the main domain needs something in front of GitHub Pages that can split traffic.
-The free way is Cloudflare: move the domain's nameservers to Cloudflare, do the subdomain
-setup above, then deploy `deploy/cloudflare-worker.js` on the route `example.com/quantlab*`.
-Visitors to every other path still get the GitHub Pages site. This adds a second service to
-maintain and gains nothing in security over the subdomain.
-
-### If the main site runs on your own server
-
-Use `deploy/nginx-quantlab.conf` (nginx) or `deploy/Caddyfile.path` (Caddy) to serve the app
-under `/quantlab/` beside the site.
-
-The web interface uses relative addresses, so it works at any path as long as the proxy strips
-the prefix (all provided configs do). Serving under `/quantlab/` with login was tested locally;
-the Docker, nginx and Cloudflare files have not been run on a live server, so treat the first
-deployment as a test.
+QuantLab runs on your own computer and is only reachable from that computer: the server
+listens on `127.0.0.1`, so nothing on your network or the internet can open it. Leave the
+terminal window open while you use it and press Ctrl+C to stop it. Your watchlist, paper
+account and news archive are kept in the `data` folder next to the code.
 
 ## Settings
 
@@ -177,7 +129,7 @@ All optional, set as environment variables:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `QUANTLAB_PASSWORD` | none | Password for the web app; no login when unset |
+| `QUANTLAB_PASSWORD` | none | Optional password for the web app; not needed for local use |
 | `QUANTLAB_DATA_DIR` | `data` | Where the database and price cache live |
 | `QUANTLAB_PAPER_START_CASH` | `100000` | Starting cash in each paper account |
 | `QUANTLAB_PAPER_SLIPPAGE_BPS` / `QUANTLAB_PAPER_COMMISSION_BPS` | `5` / `5` | Stock paper trading costs |

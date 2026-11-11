@@ -131,7 +131,7 @@ def test_chat_endpoint(monkeypatch):
     assert r.json() == {"reply": "AAPL is a **Buy**.", "tools_used": ["get_signal"]}
     assert seen["model"] == "claude-opus-5-5" and len(seen["messages"]) == 3
     assert "AAPL open in the app" in seen["system"][1]["text"]
-    assert len(seen["tools"]) == len(chat.TOOL_FUNCTIONS) == 10
+    assert len(seen["tools"]) == len(chat.TOOL_FUNCTIONS) == 12
     assert client.post("/api/chat", json={"messages": [{"role": "system", "content": "x"}]}).status_code == 422
 
 

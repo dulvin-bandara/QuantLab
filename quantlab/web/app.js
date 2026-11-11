@@ -166,6 +166,109 @@ async function dashboardView() {
       asOf ? `Latest bar: ${asOf.as_of}. ` : "", "Click a row for the full breakdown."));
 }
 
+// ---------------------------------------------------------------- buy guide
+/** "How to buy" panel: minimum money, order types for a chosen time, and a suggested option. Loads when opened. */
+function buyGuide(symbol, open = false) {
+  const body = h("div", { class: "stack", style: "margin-top:12px" });
+  const whenIn = h("input", { type: "datetime-local", "aria-label": "Planned time to buy", value: state.buyWhen || "", onchange: () => { state.buyWhen = whenIn.value; load(); } });
+  const nowBtn = h("button", { type: "button", onclick: () => { whenIn.value = ""; state.buyWhen = ""; load(); } }, "Now");
+  async function load() {
+    fill(body, loading("Working out how to buy…"));
+    try {
+      const when = whenIn.value ? "&when=" + encodeURIComponent(new Date(whenIn.value).toISOString()) : "";
+      const g = await api(`/buy-guide?symbol=${encodeURIComponent(symbol)}${when}`);
+      const s = g.session, m = g.minimum_equity, o = g.option, cur = g.currency;
+      fill(body,
+        g.signal_warning ? h("p", { class: "notice" }, g.signal_warning) : null,
+        h("div", { class: "row" }, h("span", { class: "small muted" }, "Planning to buy at"), whenIn, nowBtn,
+          h("span", { class: "small" }, `${s.market}: ${s.phase} (${s.exchange_time} exchange time)`,
+            s.next_open ? `, next opens ${new Date(s.next_open).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })} your time` : "")),
+        h("div", {}, h("h3", {}, "Minimum money needed"),
+          h("div", { class: "tiles", style: "margin-top:8px" },
+            tile("Smallest purchase", fmt.money(m.one_parcel, cur), `${m.one_parcel_shares} share${m.one_parcel_shares > 1 ? "s" : ""}`),
+            tile("Account size for the 1% rule", fmt.money(m.for_risk_rule, cur), "so that parcel risks ≤ 1% at the stop"),
+            tile("One option contract", m.option_contract == null ? dash : fmt.money(m.option_contract, cur), m.option_contract == null ? "no option available" : "the most it can lose")),
+          h("p", { class: "muted small" }, m.one_parcel_note)),
+        h("div", {}, h("h3", {}, "Ways to buy"),
+          h("p", { style: "margin:6px 0 10px" }, h("strong", {}, "Suggested: "), g.recommendation),
+          table([{ t: "Order type", l: 1 }, "Price", { t: "What it does", l: 1 }, { t: "Use it when", l: 1 }], g.orders.map((x) => h("tr", {},
+            h("td", {}, x.recommended ? h("strong", {}, x.type + " ✓") : x.type), h("td", { class: "num" }, x.price == null ? "market" : fmt.num(x.price)),
+            h("td", { class: "l wrap" }, x.what), h("td", { class: "l wrap" }, x.use_when)))),
+          h("p", { class: "muted small" }, `After you are in: stop-loss at ${fmt.num(g.after_entry.stop_loss)}, take profit at ${fmt.num(g.after_entry.take_profit)}. ${g.after_entry.note}`)),
+        h("div", {}, h("h3", {}, "Option alternative"),
+          o.available ? [
+            h("p", { style: "margin:6px 0 10px" }, h("strong", {}, o.contract), ` at ${fmt.num(o.premium)} per share (${o.price_basis}). Controls 100 shares for a fraction of their cost; the premium is the most you can lose.`),
+            h("div", { class: "tiles" },
+              tile("Cost / max loss", fmt.money(o.cost, cur), `${o.days_to_expiry} days to expiry`),
+              tile("Breakeven at expiry", fmt.num(o.breakeven), `stock must rise ${fmt.pct(o.breakeven_move)}`),
+              tile("Delta", fmt.num(o.delta, 2), `acts like ${fmt.int(o.share_equivalent)} shares`),
+              tile("If stock hits target", o.profit_at_target == null ? dash : signed(o.profit_at_target, fmt.snum(o.profit_at_target, 0)), "profit at expiry"),
+              tile("If stock hits stop", o.loss_at_stop == null ? dash : signed(o.loss_at_stop, fmt.snum(o.loss_at_stop, 0)), "at expiry"),
+              tile("Time decay", fmt.num(o.theta_per_day, 0) + " / day", `implied vol ${fmt.pct(o.iv, 0)}`)),
+            o.warnings.length ? h("ul", { class: "reasons", style: "margin-top:8px" }, o.warnings.map((x) => h("li", {}, x))) : null,
+            h("div", { class: "row", style: "margin-top:10px" }, h("button", { onclick: () => go("options", symbol) }, "Open the option chain to paper trade it")),
+          ] : h("p", { class: "notice", style: "margin-top:8px" }, o.reason)),
+        h("p", { class: "muted small" }, g.caveats.join(" ")));
+    } catch (e) { fill(body, errorBox(e)); }
+  }
+  if (open) { onMount(load); return body; }
+  const details = h("details", { class: "guide", ontoggle: () => { if (details.open && !details.dataset.loaded) { details.dataset.loaded = "1"; load(); } } },
+    h("summary", {}, "How to buy: minimum money, order types and an option alternative"), body);
+  return details;
+}
+
+// ---------------------------------------------------------------- portfolio
+async function portfolioView() {
+  const out = h("div", { class: "stack" }), err = h("p", { class: "error", role: "alert" });
+  const saved = JSON.parse(localStorage.getItem("ql_portfolio") || "null") || { equity: 10000, months: 6, target: 5, market: "US" };
+  const btn = h("button", { type: "submit", class: "primary" }, "Build portfolio");
+  const form = h("form", { class: "fields", onsubmit: async (e) => {
+    e.preventDefault(); err.textContent = ""; btn.disabled = true;
+    const d = Object.fromEntries(new FormData(form));
+    localStorage.setItem("ql_portfolio", JSON.stringify(d));
+    try { show(await api("/portfolio", { body: { equity: +d.equity, months: +d.months, target_return: d.target / 100, market: d.market } })); }
+    catch (ex) { err.textContent = ex.message; } finally { btn.disabled = false; }
+  } },
+    h("label", {}, "Amount to invest", h("input", { name: "equity", type: "number", min: 1, step: "any", value: saved.equity, required: true })),
+    h("label", {}, "Market", h("select", { name: "market" }, h("option", { value: "US", selected: saved.market === "US" }, "US (USD)"), h("option", { value: "ASX", selected: saved.market === "ASX" }, "ASX (AUD)"))),
+    h("label", {}, "Period (months)", h("input", { name: "months", type: "number", min: 1, max: 60, step: 1, value: saved.months, required: true })),
+    h("label", {}, "Target return over the period (%)", h("input", { name: "target", type: "number", min: 0, max: 500, step: "any", value: saved.target, required: true })), btn);
+  function show(p) {
+    const cur = p.inputs.currency, a = p.assumptions;
+    const rows = p.positions.map((x) => h("tr", { class: "click", onclick: () => go("research", x.symbol) },
+      h("td", {}, h("strong", {}, x.symbol), h("div", { class: "muted small" }, x.name)), h("td", { class: "l" }, x.role),
+      h("td", { class: "num" }, fmt.int(x.shares)), h("td", { class: "num" }, fmt.num(x.price)), h("td", { class: "num" }, fmt.money(x.value, cur)),
+      h("td", { class: "num" }, fmt.pct(x.weight)), h("td", { class: "num" }, fmt.num(x.beta)), h("td", { class: "num" }, x.stop == null ? dash : fmt.num(x.stop))));
+    rows.push(h("tr", {}, h("td", {}, h("strong", {}, "Cash")), h("td", { class: "l" }, "Uninvested"), h("td", {}, ""), h("td", {}, ""),
+      h("td", { class: "num" }, fmt.money(p.cash, cur)), h("td", { class: "num" }, fmt.pct(p.cash_weight)), h("td", { class: "num" }, "0.00"), h("td", {}, "")));
+    fill(out,
+      h("section", { class: "card" }, h("h2", {}, "Is the target realistic?"),
+        h("p", { style: "margin:0 0 12px" }, p.verdict),
+        h("div", { class: "tiles" },
+          tile("Target", fmt.spct(p.inputs.target_return), `${fmt.pct(p.required_annual_return)} a year`),
+          tile("Chance of reaching it", fmt.pct(p.probability_of_target, 0), "estimate, not a promise"),
+          tile("Expected return", fmt.spct(p.expected_return), `about ${fmt.money(p.expected_value, cur)}`),
+          tile("Likely range", `${fmt.spct(p.range_low, 0)} to ${fmt.spct(p.range_high, 0)}`, "9 times in 10"),
+          tile("Worst drop, last 2 years", fmt.pct(p.worst_drop_last_2y), "this mix, peak to trough"),
+          tile("Loss if every stop is hit", fmt.money(p.loss_if_all_stops_hit, cur), "ideas only; the fund has no stop"))),
+      h("section", { class: "card" }, h("div", { class: "row between" }, h("h2", {}, "Recommended portfolio"),
+          h("span", { class: "muted small" }, `${fmt.pct(p.invest_share, 0)} invested · beta ${fmt.num(p.beta)} · volatility ${fmt.pct(p.annual_volatility, 0)} a year`)),
+        table([{ t: "Holding", l: 1 }, { t: "Role", l: 1 }, "Shares", "Price", "Value", "Weight", "Beta", "Stop"], rows),
+        p.notes.length ? h("ul", { class: "reasons", style: "margin-top:10px" }, p.notes.map((x) => h("li", {}, x))) : null),
+      h("section", { class: "card" }, h("h2", {}, "How this was worked out"),
+        h("ul", { class: "reasons" },
+          h("li", {}, `Structure: about 40% of the invested money in a broad index fund, the rest spread over up to 6 current ideas from the latest scan${a.scan_date ? ` (${new Date(a.scan_date).toLocaleDateString([], { dateStyle: "medium" })})` : ""}, with calmer stocks given more. Whole shares only.`),
+          h("li", {}, "How much is invested versus held in cash is set by your target: a higher target means more in shares, up to 100%. The app never borrows to reach a target."),
+          h("li", {}, `Expected return assumes cash earns ${fmt.pct(a.cash_rate, 0)} a year and the share market ${fmt.pct(a.equity_premium, 0)} a year more than cash, scaled by each holding's beta. It does not assume the ideas keep rising at their recent pace.`),
+          h("li", {}, "The range and the chance of reaching the target come from how much this mix moved day to day over the last two years. Real markets produce bigger shocks than that method expects, so treat the low end as optimistic."),
+          h("li", {}, "This is a starting allocation, not financial advice. It ignores tax, brokerage, currency conversion and anything else you already own."))));
+  }
+  onMount(() => form.requestSubmit());
+  return [h("section", { class: "card" }, h("h2", {}, "Portfolio builder"),
+    h("p", { class: "muted small", style: "margin-top:-6px" }, "Enter how much you have, for how long, and the return you are aiming for. The example below uses 10,000 over 6 months aiming for 5%; change the numbers and rebuild."),
+    form, err), out];
+}
+
 // ---------------------------------------------------------------- ideas
 async function ideasView() {
   let st = await api("/ideas");
@@ -197,7 +300,8 @@ async function ideasView() {
         tile("Last 6 months", signed(it.ret_120, fmt.spct(it.ret_120))),
         tile("Stop / target", `${fmt.num(it.plan.stop)} / ${fmt.num(it.plan.target)}`, "2 and 3 × ATR"),
         tile("Suggested size", fmt.int(it.plan.shares) + " sh", `risks ${fmt.int(it.plan.risk_amount)} ${it.currency}`)),
-      h("ul", { class: "reasons" }, it.reasons.map((x) => h("li", {}, x)))));
+      h("ul", { class: "reasons" }, it.reasons.map((x) => h("li", {}, x))),
+      buyGuide(it.symbol)));
     fill(box,
       st.error ? errorBox(new Error(st.error)) : null,
       h("p", { class: "muted small" }, `Scanned ${new Date(r.scanned_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}: ${r.screened} of ${r.universe_size} stocks screened`,
@@ -305,7 +409,8 @@ async function researchView() {
       })) : h("p", { class: "muted" }, "No recent headlines found."));
   }).catch((e) => fill(newsCard, h("h2", {}, "News"), errorBox(e)));
 
-  return [chartCard, h("div", { class: "grid-even" }, signalCard, newsCard)];
+  return [chartCard, h("div", { class: "grid-even" }, signalCard, newsCard),
+    h("section", { class: "card" }, h("h2", {}, `Buying ${sym}`), buyGuide(sym, true))];
 }
 
 // ---------------------------------------------------------------- options
@@ -654,7 +759,7 @@ async function assistantView() {
     h("p", { class: "muted small" }, `Answers come from Claude (${status.model}) using this app's delayed data${status.web_search ? " and web search" : ""}. They are research help, not financial advice, and each question is billed to your Anthropic API key.`));
 }
 
-const VIEWS = { dashboard: dashboardView, ideas: ideasView, research: researchView, options: optionsView, backtest: backtestView, paper: paperView, assistant: assistantView };
+const VIEWS = { dashboard: dashboardView, ideas: ideasView, portfolio: portfolioView, research: researchView, options: optionsView, backtest: backtestView, paper: paperView, assistant: assistantView };
 
 // ---------------------------------------------------------------- startup
 function showLogin() { $("#login").hidden = false; $("#login-password").focus(); }

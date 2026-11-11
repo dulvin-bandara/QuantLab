@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import __version__, backtest, chat, ideas, paper, signals
+from . import __version__, backtest, chat, ideas, paper, planner, signals
 from .analytics import indicators as ind
 from .analytics import options as opt
 from .analytics import risk
@@ -365,6 +365,41 @@ def ideas_scan(market_name: str = "ALL"):
     if any(m not in ideas.UNIVERSES for m in markets):
         raise HTTPException(400, "Market must be US, ASX or ALL.")
     return {"started": ideas.start_scan(markets)}
+
+
+# ---------------------------------------------------------------- planning
+
+def _parse_when(when: str | None):
+    if not when:
+        return None
+    from datetime import datetime, timezone
+
+    try:
+        dt = datetime.fromisoformat(when.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, "Could not read that date and time.")
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+@app.get("/api/buy-guide")
+def buy_guide(symbol: str, when: str | None = None):
+    """How to buy a stock: minimum money, order types, what suits the session at `when` (ISO time, default now)."""
+    return clean(planner.buy_guide(symbol, _parse_when(when)))
+
+
+class PortfolioBody(BaseModel):
+    equity: float = Field(gt=0, le=1e9)
+    months: float = Field(ge=1, le=60)
+    target_return: float = Field(ge=0, le=5, description="Target return over the period as a decimal, e.g. 0.05")
+    market: str = Field(default="US", pattern="^(US|ASX)$")
+
+
+@app.post("/api/portfolio")
+def portfolio(b: PortfolioBody):
+    try:
+        return clean(planner.build_portfolio(b.equity, b.months, b.target_return, b.market))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 # ---------------------------------------------------------------- assistant

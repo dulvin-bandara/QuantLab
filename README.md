@@ -128,35 +128,48 @@ Three things keep it private:
 - **Unlisted.** Nothing links to it, and every response tells search engines not to index it.
   Treat this as tidiness, not security: the password is the protection.
 
-QuantLab is a Python program, so it needs a machine that can run it (a small VPS is enough).
-A static host (GitHub Pages, Netlify, Vercel static sites and similar) cannot run it by itself.
-How you connect it depends on where your website is hosted today:
+QuantLab is a Python program, so it needs a machine that can run it. A static host such as
+GitHub Pages cannot run it or forward a path to it, so the app runs on a small server of its
+own (any VPS with about 1 GB of memory and Docker) and your domain points at that server.
 
-**Your site runs on a server you control with nginx.** Run QuantLab on that server and add the
-two `location` blocks from `deploy/nginx-quantlab.conf` to the site's existing HTTPS server block.
+### Recommended: a subdomain (works with GitHub Pages)
 
-**Your site runs on a server you control with Caddy, or you are starting fresh.** Use the
-included Docker setup: point the domain's DNS `A` record at the server, then
+Your main site stays exactly where it is. QuantLab gets `quantlab.example.com`.
 
-```bash
-cp .env.example .env
-```
+1. Rent a small VPS, install Docker, and clone this repository onto it.
+2. At your DNS provider, add an `A` record: host `quantlab`, answer = the server's IP address.
+   Leave the records that point the main domain at GitHub Pages untouched.
+3. On the server, create the settings file and fill in the subdomain and a strong password:
 
-fill in the domain and password, replace the final `handle` block in `Caddyfile` with your
-existing site, and start it:
+   ```bash
+   cp .env.example .env
+   ```
 
-```bash
-docker compose up -d --build
-```
+4. Start it:
 
-**Your site is on a static or managed host.** Run QuantLab on a separate small server and
-either use a subdomain (for example `quantlab.example.com`, one DNS record) or, if your host
-supports proxy rewrites, forward `/quantlab/*` to that server.
+   ```bash
+   docker compose up -d --build
+   ```
+
+Caddy obtains the HTTPS certificate by itself once the DNS record has spread (usually minutes).
+
+### Optional: the exact path `example.com/quantlab`
+
+A path on the main domain needs something in front of GitHub Pages that can split traffic.
+The free way is Cloudflare: move the domain's nameservers to Cloudflare, do the subdomain
+setup above, then deploy `deploy/cloudflare-worker.js` on the route `example.com/quantlab*`.
+Visitors to every other path still get the GitHub Pages site. This adds a second service to
+maintain and gains nothing in security over the subdomain.
+
+### If the main site runs on your own server
+
+Use `deploy/nginx-quantlab.conf` (nginx) or `deploy/Caddyfile.path` (Caddy) to serve the app
+under `/quantlab/` beside the site.
 
 The web interface uses relative addresses, so it works at any path as long as the proxy strips
-the prefix (both provided configs do). This was tested locally under `/quantlab/` with login;
-the Docker and nginx files have not been run on a live server, so treat the first deployment
-as a test.
+the prefix (all provided configs do). Serving under `/quantlab/` with login was tested locally;
+the Docker, nginx and Cloudflare files have not been run on a live server, so treat the first
+deployment as a test.
 
 ## Settings
 

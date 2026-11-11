@@ -1,18 +1,7 @@
-# Serves QuantLab at https://<your domain>/quantlab/ with automatic HTTPS.
-# Nothing on the site links to it, search engines are told not to index it,
-# and the app itself asks for the password.
+# Serves QuantLab at https://<QUANTLAB_DOMAIN>/ with automatic HTTPS.
+# Use a subdomain here, e.g. quantlab.example.com, pointed at this server with a DNS A record.
+# (To serve it under a path of a site hosted on this same server instead, see deploy/Caddyfile.path.)
 {$QUANTLAB_DOMAIN} {
 	encode gzip
-
-	redir /quantlab /quantlab/
-	handle_path /quantlab/* {
-		reverse_proxy quantlab:8000
-	}
-
-	# Everything else on the domain. Replace this block with your existing
-	# website (for example `root * /srv/site` + `file_server`, or a
-	# `reverse_proxy` to wherever the site runs).
-	handle {
-		respond "Not found" 404
-	}
+	reverse_proxy quantlab:8000
 }

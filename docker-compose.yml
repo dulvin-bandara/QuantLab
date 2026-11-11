@@ -1,5 +1,5 @@
-# Puts QuantLab at https://<your domain>/quantlab/ with automatic HTTPS (Caddy fetches the certificate).
-# 1. Point your domain's DNS A record at this server.
+# Puts QuantLab on its own subdomain with automatic HTTPS (Caddy fetches the certificate).
+# 1. Point a DNS A record for the subdomain (e.g. quantlab.example.com) at this server.
 # 2. Copy .env.example to .env and fill in QUANTLAB_DOMAIN and QUANTLAB_PASSWORD.
 # 3. docker compose up -d --build
 services:

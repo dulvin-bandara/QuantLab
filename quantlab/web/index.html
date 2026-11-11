@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QuantLab</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">Quant<span>Lab</span></div>
+  <nav id="tabs" aria-label="Sections">
+    <button data-view="dashboard">Dashboard</button>
+    <button data-view="research">Research</button>
+    <button data-view="options">Options</button>
+    <button data-view="backtest">Backtest</button>
+    <button data-view="paper">Paper trading</button>
+  </nav>
+  <form id="search" autocomplete="off">
+    <input id="search-input" placeholder="Ticker, e.g. AAPL or BHP.AX" aria-label="Look up a ticker">
+    <button type="submit">Open</button>
+  </form>
+  <button id="logout" class="ghost" hidden>Log out</button>
+</header>
+
+<main id="view"></main>
+
+<footer>
+  Prices, option chains and news are free, delayed data from Yahoo Finance and Google News.
+  Signals and forecasts are research aids, not financial advice. Paper trades use simulated money.
+</footer>
+
+<div id="login" class="overlay" hidden>
+  <form id="login-form" class="card">
+    <h2>QuantLab</h2>
+    <label>Password <input type="password" id="login-password" autocomplete="current-password" required></label>
+    <p id="login-error" class="error" role="alert"></p>
+    <button type="submit" class="primary">Log in</button>
+  </form>
+</div>
+<div id="tooltip" class="tooltip" hidden></div>
+
+<script src="vendor/lightweight-charts.standalone.production.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

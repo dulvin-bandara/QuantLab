@@ -43,6 +43,7 @@ const dash = "–";
 const fmt = {
   num: (v, d = 2) => v == null ? dash : (Math.abs(v) < 0.5 / 10 ** d ? 0 : Number(v)).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d }),
   int: (v) => v == null ? dash : Math.round(v).toLocaleString(),
+  shares: (v) => v == null ? dash : Number(v).toLocaleString(undefined, { maximumFractionDigits: 4 }),  // whole or fractional
   pct: (v, d = 1) => v == null ? dash : (v * 100).toFixed(d) + "%",
   spct: (v, d = 1) => v == null ? dash : (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v * 100).toFixed(d) + "%",
   snum: (v, d = 2) => v == null ? dash : (v > 0 ? "+" : v < 0 ? "−" : "") + fmt.num(Math.abs(v), d),
@@ -446,22 +447,24 @@ async function portfolioView() {
   const out = h("div", { class: "stack" }), err = h("p", { class: "error", role: "alert" }), savedBox = h("div", { class: "stack" });
   const saved = JSON.parse(localStorage.getItem("ql_portfolio") || "null") || { equity: 10000, months: 6, target: 5, market: "US" };
   const btn = h("button", { type: "submit", class: "primary" }, "Build portfolio");
-  const body = () => { const d = Object.fromEntries(new FormData(form)); return { equity: +d.equity, months: +d.months, target_return: d.target / 100, market: d.market }; };
+  const frac = h("input", { type: "checkbox", name: "fractional", checked: !!saved.fractional });
+  const body = () => { const d = Object.fromEntries(new FormData(form)); return { equity: +d.equity, months: +d.months, target_return: d.target / 100, market: d.market, fractional: frac.checked }; };
   const form = h("form", { class: "fields", onsubmit: async (e) => {
     e.preventDefault(); err.textContent = ""; btn.disabled = true;
-    localStorage.setItem("ql_portfolio", JSON.stringify(Object.fromEntries(new FormData(form))));
+    localStorage.setItem("ql_portfolio", JSON.stringify({ ...Object.fromEntries(new FormData(form)), fractional: frac.checked }));
     try { show(await api("/portfolio", { body: body() })); }
     catch (ex) { err.textContent = ex.message; } finally { btn.disabled = false; }
   } },
     h("label", {}, "Amount to invest", h("input", { name: "equity", type: "number", min: 1, step: "any", value: saved.equity, required: true })),
     h("label", {}, "Market", h("select", { name: "market" }, h("option", { value: "US", selected: saved.market === "US" }, "US (USD)"), h("option", { value: "ASX", selected: saved.market === "ASX" }, "ASX (AUD)"))),
     h("label", {}, "Period (months)", h("input", { name: "months", type: "number", min: 1, max: 60, step: 1, value: saved.months, required: true })),
-    h("label", {}, "Target return over the period (%)", h("input", { name: "target", type: "number", min: 0, max: 500, step: "any", value: saved.target, required: true })), btn);
+    h("label", {}, "Target return over the period (%)", h("input", { name: "target", type: "number", min: 0, max: 500, step: "any", value: saved.target, required: true })),
+    h("label", { class: "row small", style: "align-self:center", title: "Size positions in fractions of a share. Only some brokers sell these, mostly for US shares." }, frac, "Allow fractional shares"), btn);
   function show(p) {
     const cur = p.inputs.currency, a = p.assumptions, owned = p.positions.some((x) => x.held), brokered = p.positions.some((x) => x.broker);
     const rows = p.positions.map((x) => h("tr", { class: "click", onclick: () => go("research", x.symbol) },
       h("td", {}, h("strong", {}, x.symbol), h("div", { class: "muted small" }, x.name)), h("td", { class: "l" }, x.role),
-      h("td", { class: "num" }, fmt.int(x.shares)), owned ? h("td", { class: "num" }, fmt.int(x.to_buy)) : null,
+      h("td", { class: "num" }, fmt.shares(x.shares)), owned ? h("td", { class: "num" }, fmt.shares(x.to_buy)) : null,
       h("td", { class: "num" }, fmt.num(x.price)), h("td", { class: "num" }, fmt.money(x.value, cur)),
       h("td", { class: "num" }, fmt.pct(x.weight)), h("td", { class: "num" }, fmt.num(x.beta)), h("td", { class: "num" }, x.stop == null ? dash : fmt.num(x.stop)),
       brokered ? h("td", { class: "l" }, x.broker ? `${x.broker} (${fmt.num(x.fee)})` : dash) : null));
@@ -490,7 +493,7 @@ async function portfolioView() {
         } }, "Save and track this portfolio"), saveErr) : null),
       h("section", { class: "card" }, h("h2", {}, "How this was worked out"),
         h("ul", { class: "reasons" },
-          h("li", {}, `Structure: about 40% of the invested money in a broad index fund, the rest spread over up to 6 current ideas from the latest scan${a.scan_date ? ` (${new Date(a.scan_date).toLocaleDateString([], { dateStyle: "medium" })})` : ""}, with calmer stocks given more. Whole shares only.`),
+          h("li", {}, `Structure: about 40% of the invested money in a broad index fund, the rest spread over up to 6 current ideas from the latest scan${a.scan_date ? ` (${new Date(a.scan_date).toLocaleDateString([], { dateStyle: "medium" })})` : ""}, with calmer stocks given more. ${p.inputs.fractional ? "Positions are sized in fractions of a share, so each holding matches its intended weight exactly." : "Whole shares only; tick \"Allow fractional shares\" to size positions exactly."}`),
           h("li", {}, "How much is invested versus held in cash is set by your target: a higher target means more in shares, up to 100%. The app never borrows to reach a target."),
           h("li", {}, `Expected return assumes cash earns ${fmt.pct(a.cash_rate, 0)} a year and the share market ${fmt.pct(a.equity_premium, 0)} a year more than cash, scaled by each holding's beta. It does not assume the ideas keep rising at their recent pace.`),
           h("li", {}, "The range and the chance of reaching the target come from how much this mix moved day to day over the last two years. Real markets produce bigger shocks than that method expects, so treat the low end as optimistic."),
@@ -520,7 +523,7 @@ async function portfolioView() {
         t.history.length > 2 ? [legend, el] : h("p", { class: "muted small" }, "The value chart appears once a few trading days have passed."),
         h("h3", {}, "What to do"), h("ul", { class: "reasons" }, t.suggestions.map((x) => h("li", {}, x))),
         table([{ t: "Holding", l: 1 }, "Shares", "Bought at", "Now", "Return", "Weight then", "Weight now", { t: "Signal", l: 1 }], t.positions.map((x) => h("tr", {},
-          h("td", {}, h("strong", {}, x.symbol)), h("td", { class: "num" }, fmt.int(x.shares)), h("td", { class: "num" }, fmt.num(x.price)), h("td", { class: "num" }, fmt.num(x.price_now)),
+          h("td", {}, h("strong", {}, x.symbol)), h("td", { class: "num" }, fmt.shares(x.shares)), h("td", { class: "num" }, fmt.num(x.price)), h("td", { class: "num" }, fmt.num(x.price_now)),
           h("td", {}, signed(x.return, fmt.spct(x.return))), h("td", { class: "num" }, fmt.pct(x.weight)), h("td", { class: "num" }, fmt.pct(x.weight_now)),
           h("td", { class: "l" }, x.stop_hit ? "Stop hit" : x.signal || dash)))));
       if (t.history.length > 2) {

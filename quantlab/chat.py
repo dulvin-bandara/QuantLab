@@ -271,7 +271,8 @@ def get_buy_guide(symbol: str, when: str = "") -> str:
 
 
 @_safe
-def build_portfolio(equity: float, months: float, target_return_pct: float, market_name: str = "US") -> str:
+def build_portfolio(equity: float, months: float, target_return_pct: float, market_name: str = "US",
+                    fractional: bool = False) -> str:
     """Build a recommended whole-share portfolio for an amount of money, a period and a target return.
 
     The portfolio is a broad index fund core plus the top ideas from the latest scan, with the
@@ -284,8 +285,11 @@ def build_portfolio(equity: float, months: float, target_return_pct: float, mark
         months: Investment period in months, 1 to 60.
         target_return_pct: Target total return over the period in percent, e.g. 5 for 5%.
         market_name: "US" or "ASX".
+        fractional: True to size positions in fractions of a share (only some brokers sell these,
+            mostly for US shares); False for whole shares.
     """
-    return _json(planner.build_portfolio(float(equity), float(months), float(target_return_pct) / 100, market_name))
+    return _json(planner.build_portfolio(float(equity), float(months), float(target_return_pct) / 100, market_name,
+                                         fractional=bool(fractional)))
 
 
 @_safe

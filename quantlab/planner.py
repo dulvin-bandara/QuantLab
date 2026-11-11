@@ -250,7 +250,7 @@ def buy_guide(symbol: str, when: datetime | None = None) -> dict:
 
 
 def build_portfolio(equity: float, months: float, target_return: float, market_name: str = "US",
-                    use_holdings: bool = True) -> dict:
+                    use_holdings: bool = True, fractional: bool = False) -> dict:
     """A whole-share portfolio for ``equity`` aiming at ``target_return`` (decimal) over ``months``.
 
     Structure: a broad index fund as the core, the top current ideas around it, and cash. How
@@ -312,11 +312,19 @@ def build_portfolio(equity: float, months: float, target_return: float, market_n
     plans = {p["symbol"]: p for p in picks}
     positions, invested = [], 0.0
     for s in w:
-        shares = math.floor(equity * invest_share * w[s] / prices[s])
-        if shares < 1:
-            if invest_share > 0:
-                notes.append(f"{s} was left out: one share ({prices[s]:,.2f} {cur}) is more than its slice of this portfolio.")
-            continue
+        exact = equity * invest_share * w[s] / prices[s]
+        if fractional:
+            # Fractions of a share, to 4 decimal places (rounded down so the budget is never exceeded).
+            shares = math.floor(exact * 1e4) / 1e4
+            if shares * prices[s] < 1:   # brokers that sell fractions need an order of about 1 unit of currency
+                continue
+        else:
+            shares = math.floor(exact)
+            if shares < 1:
+                if invest_share > 0:
+                    notes.append(f"{s} was left out: one share ({prices[s]:,.2f} {cur}) is more than its slice of this "
+                                 "portfolio. Allowing fractional shares would include it.")
+                continue
         value = shares * prices[s]
         invested += value
         p = plans.get(s)
@@ -326,7 +334,7 @@ def build_portfolio(equity: float, months: float, target_return: float, market_n
     # Whole shares leave money over. Spend it on whichever holding is furthest below its intended
     # weight, so the amount invested ends up close to what the target calls for.
     budget = equity * invest_share
-    while positions:
+    while positions and not fractional:
         short = [(budget * w[p["symbol"]] - p["value"], p) for p in positions if p["price"] <= budget - invested]
         if not short:
             break
@@ -338,14 +346,26 @@ def build_portfolio(equity: float, months: float, target_return: float, market_n
     from .tracking import held_shares
 
     owned = held_shares() if use_holdings else {}
+    no_broker = False
     for p in positions:
         p["weight"] = p["value"] / equity
         # Shares you already hold (imported holdings) count toward the position.
         p["held"] = min(owned.get(p["symbol"], 0), p["shares"])
-        p["to_buy"] = p["shares"] - p["held"]
-        rec = brokers.recommend(p["symbol"], "buy", p["to_buy"] * p["price"]) if p["to_buy"] else {"available": False}
+        p["to_buy"] = round(p["shares"] - p["held"], 4)
+        part = fractional and p["to_buy"] != int(p["to_buy"])
+        rec = (brokers.recommend(p["symbol"], "buy", p["to_buy"] * p["price"], needs_fractional=part)
+               if p["to_buy"] else {"available": False})
+        if part and not rec["available"] and brokers.list_brokers():
+            no_broker = True
         p["broker"] = rec["recommended"] if rec["available"] else None
         p["fee"] = next(o["total"] for o in rec["options"] if o["broker"] == rec["recommended"]) if rec["available"] else None
+    if no_broker:
+        notes.append("None of your brokers is marked as offering fractional shares, so no broker is suggested for the "
+                     "part-share orders. If one of them does offer fractions, tick that box for it under My portfolio.")
+    if fractional and positions:
+        notes.append("Fractional shares are only sold by some brokers, usually for US shares and often for market orders "
+                     "only; ASX shares are rarely available in fractions. Check that your broker offers them before relying "
+                     "on these quantities.")
     if any(p["held"] for p in positions):
         notes.append("You already own some of these shares; the 'To buy' column shows only what is missing.")
     weights = pd.Series({p["symbol"]: p["weight"] for p in positions}, dtype=float)
@@ -376,7 +396,8 @@ def build_portfolio(equity: float, months: float, target_return: float, market_n
                    f"Annualised, it asks for {required:.0%} a year; treat the portfolio below as the sensible limit, not a route to the target.")
     risk_at_stops = sum(p["shares"] * (p["price"] - p["stop"]) for p in positions if p["stop"])
     return {
-        "inputs": {"equity": equity, "months": months, "target_return": target_return, "market": market_name, "currency": cur},
+        "inputs": {"equity": equity, "months": months, "target_return": target_return, "market": market_name,
+                   "currency": cur, "fractional": fractional},
         "required_annual_return": required, "invest_share": invested / equity, "cash": cash, "cash_weight": cash_w,
         "positions": positions, "verdict": verdict, "probability_of_target": prob,
         "expected_return": exp_period, "expected_value": equity * (1 + exp_period),

@@ -484,12 +484,13 @@ class PortfolioBody(BaseModel):
     target_return: float = Field(ge=0, le=5, description="Target return over the period as a decimal, e.g. 0.05")
     market: str = Field(default="US", pattern="^(US|ASX)$")
     name: str = Field(default="", max_length=60)
+    fractional: bool = False
 
 
 @app.post("/api/portfolio")
 def portfolio(b: PortfolioBody):
     try:
-        return clean(planner.build_portfolio(b.equity, b.months, b.target_return, b.market))
+        return clean(planner.build_portfolio(b.equity, b.months, b.target_return, b.market, fractional=b.fractional))
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
@@ -498,7 +499,7 @@ def portfolio(b: PortfolioBody):
 def portfolio_save(b: PortfolioBody):
     """Build the portfolio at current prices and save it for tracking."""
     try:
-        plan = planner.build_portfolio(b.equity, b.months, b.target_return, b.market)
+        plan = planner.build_portfolio(b.equity, b.months, b.target_return, b.market, fractional=b.fractional)
         return {"id": tracking.save_portfolio(b.name, plan)}
     except ValueError as exc:
         raise HTTPException(400, str(exc))
@@ -571,10 +572,11 @@ def broker_delete(name: str):
 
 @app.get("/api/brokers/recommend")
 def broker_recommend(symbol: str, action: str = "buy", value: float = 0.0, instrument: str = "stock",
-                     contracts: int = 1, needs_conditional: bool = False):
+                     contracts: int = 1, needs_conditional: bool = False, needs_fractional: bool = False):
     if action not in ("buy", "sell") or instrument not in ("stock", "option"):
         raise HTTPException(400, "Action must be buy or sell; instrument must be stock or option.")
-    return clean(brokers.recommend(symbol, action, max(value, 0.0), instrument, max(contracts, 1), needs_conditional))
+    return clean(brokers.recommend(symbol, action, max(value, 0.0), instrument, max(contracts, 1), needs_conditional,
+                                   needs_fractional))
 
 
 @app.post("/api/holdings/import")

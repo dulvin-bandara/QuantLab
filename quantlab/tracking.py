@@ -262,9 +262,9 @@ def track_portfolio(portfolio_id: int) -> dict:
             suggestions.append(f"Review {p['symbol']}: its price signal has turned to {p['signal']}.")
         drift = p["weight_now"] - p["weight"]
         if abs(drift) >= DRIFT and not p["stop_hit"]:
-            shares = round(abs(drift) * value_now / p["price_now"])
+            shares = round(abs(drift) * value_now / p["price_now"], 2 if inputs.get("fractional") else None)
             if shares:
-                suggestions.append(f"{'Trim' if drift > 0 else 'Add to'} {p['symbol']} by about {shares} share(s): it is now "
+                suggestions.append(f"{'Trim' if drift > 0 else 'Add to'} {p['symbol']} by about {shares:g} share(s): it is now "
                                    f"{p['weight_now']:.0%} of the portfolio against {p['weight']:.0%} at the start.")
     if progress >= 1:
         suggestions.append("The planned period has ended. Build a fresh portfolio from the current ideas.")

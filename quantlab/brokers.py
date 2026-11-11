@@ -104,7 +104,7 @@ def trade_cost(broker: dict, symbol: str, value: float = 0.0, instrument: str = 
 
 
 def recommend(symbol: str, action: str = "buy", value: float = 0.0, instrument: str = "stock", contracts: int = 1,
-              needs_conditional: bool = False) -> dict:
+              needs_conditional: bool = False, needs_fractional: bool = False) -> dict:
     """Rank your brokers for one trade and pick the cheapest that can do it.
 
     ``action`` is "buy" or "sell". Selling shares can only happen where they are held, so for a
@@ -123,6 +123,9 @@ def recommend(symbol: str, action: str = "buy", value: float = 0.0, instrument: 
         what = "US options" if instrument == "option" else ("ASX shares" if market.is_asx(symbol) else "US shares")
         if cost is None:
             excluded.append(f"{b['name']} does not trade {what}.")
+            continue
+        if needs_fractional and instrument == "stock" and not b["fractional"]:
+            excluded.append(f"{b['name']} does not offer fractional shares.")
             continue
         if action == "sell" and instrument == "stock" and held and b["name"] not in held:
             excluded.append(f"{b['name']} does not hold your {symbol} shares.")

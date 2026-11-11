@@ -336,3 +336,28 @@ def test_database_setup_survives_simultaneous_first_use(tmp_path, monkeypatch):
     [t.start() for t in threads]
     [t.join() for t in threads]
     assert errors == []
+
+
+def test_fractional_shares_fill_the_budget_exactly(monkeypatch):
+    from quantlab import brokers
+
+    monkeypatch.setattr(planner.risk, "beta", lambda *a: 1.0)
+    assert ideas.start_scan(["US"], wait=True)
+    whole = planner.build_portfolio(300, 3, 0.60, "US")              # too little for most whole shares
+    frac = planner.build_portfolio(300, 3, 0.60, "US", fractional=True)
+    assert len(frac["positions"]) > len(whole["positions"]) and frac["inputs"]["fractional"] is True
+    assert frac["cash"] == pytest.approx(0, abs=0.5) and frac["cash"] >= 0   # fully invested, never over budget
+    assert any(p["shares"] != int(p["shares"]) for p in frac["positions"])
+    assert all(round(p["shares"], 4) == p["shares"] for p in frac["positions"])
+    assert sum(p["value"] for p in frac["positions"]) + frac["cash"] == pytest.approx(300)
+    assert any("Fractional shares are only sold by some brokers" in n for n in frac["notes"])
+    # Only a broker marked as offering fractions is recommended for a part-share order.
+    brokers.save_broker("WholeOnly", {"us_fixed": 0.0})
+    brokers.save_broker("Fractions", {"us_fixed": 2.0, "fractional": True})
+    frac = planner.build_portfolio(300, 3, 0.60, "US", fractional=True)
+    assert {p["broker"] for p in frac["positions"]} == {"Fractions"}
+    assert planner.build_portfolio(50_000, 3, 0.60, "US")["positions"][0]["broker"] == "WholeOnly"
+    api = client.post("/api/portfolio", json={"equity": 300, "months": 3, "target_return": 0.6, "fractional": True}).json()
+    assert any(p["shares"] != int(p["shares"]) for p in api["positions"])
+    pid = client.post("/api/portfolios", json={"equity": 300, "months": 3, "target_return": 0.6, "fractional": True, "name": "F"}).json()["id"]
+    assert client.get(f"/api/portfolios/{pid}").json()["positions"][0]["shares"] == api["positions"][0]["shares"]

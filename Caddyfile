@@ -1,0 +1,4 @@
+{$QUANTLAB_DOMAIN} {
+	encode gzip
+	reverse_proxy quantlab:8000
+}

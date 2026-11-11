@@ -24,6 +24,11 @@ class Settings:
     paper_slippage_bps: float = field(default_factory=lambda: float(_env("PAPER_SLIPPAGE_BPS", "5")))
     paper_commission_bps: float = field(default_factory=lambda: float(_env("PAPER_COMMISSION_BPS", "5")))
     paper_option_fee: float = field(default_factory=lambda: float(_env("PAPER_OPTION_FEE", "0.65")))  # per contract
+    # Local time (HH:MM) of the automatic daily run while the app is open; "off" disables it.
+    daily_time: str = field(default_factory=lambda: _env("DAILY_TIME", "18:00"))
+    # Let Claude read and score news headlines instead of the built-in word scoring (uses the API key).
+    ai_news: bool = field(default_factory=lambda: _env("AI_NEWS", "") in ("1", "true", "yes"))
+    news_model: str = field(default_factory=lambda: _env("NEWS_MODEL", "claude-opus-5-5"))
     # Assistant (chat). Needs an Anthropic API key in ANTHROPIC_API_KEY.
     chat_model: str = field(default_factory=lambda: _env("CHAT_MODEL", "claude-opus-5-5"))
     chat_web_search: bool = field(default_factory=lambda: _env("CHAT_WEB_SEARCH", "") in ("1", "true", "yes"))

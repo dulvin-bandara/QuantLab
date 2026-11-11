@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm
 
-from . import ideas, signals
+from . import brokers, ideas, signals
 from .analytics import indicators as ind
 from .analytics import options as opt
 from .analytics import risk
@@ -148,6 +148,10 @@ def suggest_option(symbol: str, plan: dict | None = None) -> dict:
         if strike + px > plan["target"]:
             out["warnings"].append("Breakeven is above the stock's price target, so the stock must beat its target for "
                                    "this call to profit at expiry.")
+    days = market.get_fundamentals(symbol).get("days_to_earnings")
+    if days is not None and 0 <= days <= dte[expiry]:
+        out["warnings"].append(f"Earnings fall inside this option's life (in {days} days). Options are priced higher "
+                               "ahead of results and usually lose value quickly afterwards, even if the stock moves your way.")
     if not c["quoted"]:
         out["warnings"].append("No live bid/ask right now, so the premium is the last trade and may be stale. Recheck "
                                "during US market hours.")
@@ -173,6 +177,7 @@ def buy_guide(symbol: str, when: datetime | None = None) -> dict:
     high20 = float(df["High"].tail(20).max())
     overbought = rsi >= 70
     session = session_info(symbol, when)
+    fund = market.get_fundamentals(symbol)
     phase, far = session["phase"], session["hours_from_now"] > 20
     option = suggest_option(symbol, plan)
 
@@ -227,6 +232,14 @@ def buy_guide(symbol: str, when: datetime | None = None) -> dict:
                                 "accept both together as a bracket (one-cancels-the-other) order."},
         "minimum_equity": minimum_equity(symbol, price, atr, option["cost"] if option.get("available") else None),
         "option": option,
+        # Which of the owner's brokers is cheapest for the suggested position (it has a stop and a target).
+        "broker": brokers.recommend(symbol, "buy", plan["position_value"], needs_conditional=True),
+        "option_broker": brokers.recommend(symbol, "buy", option["cost"], "option", 1) if option.get("available") else None,
+        "fundamentals": fund,
+        "earnings_warning": None if fund.get("days_to_earnings") is None or fund["days_to_earnings"] > 14 else
+                            f"Earnings are due on {fund['next_earnings']} ({fund['days_to_earnings']} days away). Results can "
+                            "gap the price through a stop, so many swing traders wait until after the report or buy a "
+                            "smaller position.",
         "signal_warning": None if sig["score"] >= 0.2 else
                           f"The app's signal on {symbol} is currently {sig['label']}, not Buy. This guide covers how to "
                           "buy it, not whether to.",
@@ -236,7 +249,8 @@ def buy_guide(symbol: str, when: datetime | None = None) -> dict:
     }
 
 
-def build_portfolio(equity: float, months: float, target_return: float, market_name: str = "US") -> dict:
+def build_portfolio(equity: float, months: float, target_return: float, market_name: str = "US",
+                    use_holdings: bool = True) -> dict:
     """A whole-share portfolio for ``equity`` aiming at ``target_return`` (decimal) over ``months``.
 
     Structure: a broad index fund as the core, the top current ideas around it, and cash. How
@@ -321,8 +335,19 @@ def build_portfolio(equity: float, months: float, target_return: float, market_n
         p["value"] += p["price"]
         invested += p["price"]
     cash = equity - invested
+    from .tracking import held_shares
+
+    owned = held_shares() if use_holdings else {}
     for p in positions:
         p["weight"] = p["value"] / equity
+        # Shares you already hold (imported holdings) count toward the position.
+        p["held"] = min(owned.get(p["symbol"], 0), p["shares"])
+        p["to_buy"] = p["shares"] - p["held"]
+        rec = brokers.recommend(p["symbol"], "buy", p["to_buy"] * p["price"]) if p["to_buy"] else {"available": False}
+        p["broker"] = rec["recommended"] if rec["available"] else None
+        p["fee"] = next(o["total"] for o in rec["options"] if o["broker"] == rec["recommended"]) if rec["available"] else None
+    if any(p["held"] for p in positions):
+        notes.append("You already own some of these shares; the 'To buy' column shows only what is missing.")
     weights = pd.Series({p["symbol"]: p["weight"] for p in positions}, dtype=float)
 
     cash_w = cash / equity
@@ -358,6 +383,7 @@ def build_portfolio(equity: float, months: float, target_return: float, market_n
         "range_low": exp_period - 1.645 * sd, "range_high": exp_period + 1.645 * sd,
         "annual_volatility": vol_ann, "worst_drop_last_2y": max_dd, "beta": beta,
         "loss_if_all_stops_hit": risk_at_stops,
+        "total_fees": sum(p["fee"] for p in positions if p["fee"]) if any(p["fee"] is not None for p in positions) else None,
         "assumptions": {"cash_rate": rf, "equity_premium": EQUITY_PREMIUM,
                         "scan_date": scan["scanned_at"] if scan else None},
         "notes": notes,

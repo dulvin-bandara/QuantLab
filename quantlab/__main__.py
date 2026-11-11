@@ -12,6 +12,9 @@ def main() -> None:
     serve.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to accept outside connections")
     serve.add_argument("--port", type=int, default=8000)
 
+    daily = sub.add_parser("daily", help="run the daily routine once (signals, news, orders, scan, alerts)")
+    daily.add_argument("--no-scan", action="store_true", help="skip the ideas scan")
+
     sig = sub.add_parser("signal", help="print the current signal for one or more tickers")
     sig.add_argument("symbols", nargs="+")
 
@@ -24,7 +27,22 @@ def main() -> None:
         if args.host not in ("127.0.0.1", "localhost") and not settings.password:
             print("WARNING: listening beyond localhost with no QUANTLAB_PASSWORD set; anyone who can reach "
                   "this port can use the app.")
+        from . import daily as daily_job
+
+        daily_job.start_scheduler()
         uvicorn.run("quantlab.api:app", host=args.host, port=args.port, proxy_headers=True)
+    elif args.command == "daily":
+        from . import daily as daily_job
+
+        s = daily_job.run_daily(scan=not args.no_scan)
+        if "skipped" in s:
+            print(s["skipped"])
+        else:
+            print(f"Daily run finished: {s['signals']} signals refreshed, {len(s['changes'])} changed, "
+                  f"{s.get('orders_filled', 0)} paper orders filled, {s.get('ideas', 0)} ideas"
+                  f" ({len(s.get('new_ideas', []))} new).")
+            for e in s["errors"]:
+                print("  problem:", e)
     else:
         from .signals import compute_signal
 

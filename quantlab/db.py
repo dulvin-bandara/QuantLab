@@ -27,6 +27,18 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, symbol TEXT, side TEXT, qty REAL,
     price REAL, commission REAL, currency TEXT, realized REAL, note TEXT
 );
+CREATE TABLE IF NOT EXISTS paper_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT, symbol TEXT, side TEXT, qty REAL, type TEXT, price REAL,
+    status TEXT, stop_loss REAL, take_profit REAL, oco INTEGER, filled_ts TEXT, fill_price REAL, note TEXT
+);
+CREATE TABLE IF NOT EXISTS alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, kind TEXT, symbol TEXT, message TEXT, read INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS portfolios (id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT, name TEXT, data TEXT);
+CREATE TABLE IF NOT EXISTS holdings (
+    symbol TEXT, broker TEXT DEFAULT '', qty REAL, cost REAL, currency TEXT, PRIMARY KEY (symbol, broker)
+);
+CREATE TABLE IF NOT EXISTS brokers (name TEXT PRIMARY KEY, data TEXT);
 CREATE TABLE IF NOT EXISTS paper_equity (date TEXT, currency TEXT, equity REAL, PRIMARY KEY (date, currency));
 """
 
@@ -37,6 +49,11 @@ def connect():
     conn.row_factory = sqlite3.Row
     try:
         conn.executescript(SCHEMA)
+        # Columns added after the first release: upgrade databases created by older versions.
+        have = {r["name"] for r in conn.execute("PRAGMA table_info(news)")}
+        for col, kind in (("ai_sentiment", "REAL"), ("relevant", "INTEGER")):
+            if col not in have:
+                conn.execute(f"ALTER TABLE news ADD COLUMN {col} {kind}")
         yield conn
         conn.commit()
     finally:

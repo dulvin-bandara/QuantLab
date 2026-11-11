@@ -15,7 +15,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import __version__, backtest, chat, ideas, paper, planner, signals
+from . import __version__, alerts, backtest, brokers, chat, daily, ideas, paper, planner, signals, tracking
+from . import strategies as option_strats
 from .analytics import indicators as ind
 from .analytics import options as opt
 from .analytics import risk
@@ -303,6 +304,10 @@ class OrderBody(BaseModel):
     side: str
     qty: float
     note: str = ""
+    order_type: str = "market"
+    price: float | None = Field(default=None, gt=0)
+    stop_loss: float | None = Field(default=None, gt=0)
+    take_profit: float | None = Field(default=None, gt=0)
 
 
 @app.get("/api/paper/account")
@@ -313,9 +318,22 @@ def paper_account():
 @app.post("/api/paper/orders")
 def paper_order(b: OrderBody):
     try:
-        return clean(paper.place_order(b.symbol, b.side, b.qty, b.note))
+        return clean(paper.place_order(b.symbol, b.side, b.qty, b.note, b.order_type, b.price, b.stop_loss, b.take_profit))
     except paper.OrderError as exc:
         raise HTTPException(400, str(exc))
+
+
+@app.get("/api/paper/orders")
+def paper_orders(all: bool = False):
+    paper.process_orders()
+    return clean(paper.open_orders(include_done=all))
+
+
+@app.delete("/api/paper/orders/{order_id}")
+def paper_order_cancel(order_id: int):
+    if not paper.cancel_order(order_id):
+        raise HTTPException(404, "That order is not open.")
+    return {"ok": True}
 
 
 class OptionOrderBody(BaseModel):
@@ -360,11 +378,84 @@ def ideas_status():
 
 
 @app.post("/api/ideas/scan")
-def ideas_scan(market_name: str = "ALL"):
-    markets = list(ideas.UNIVERSES) if market_name.upper() == "ALL" else [market_name.upper()]
-    if any(m not in ideas.UNIVERSES for m in markets):
+def ideas_scan(market_name: str = "ALL", mid: bool = False, etf: bool = False, sector: str | None = None):
+    markets = list(ideas.UNIVERSE) if market_name.upper() == "ALL" else [market_name.upper()]
+    if any(m not in ideas.UNIVERSE for m in markets):
         raise HTTPException(400, "Market must be US, ASX or ALL.")
-    return {"started": ideas.start_scan(markets)}
+    if sector and sector not in ideas.sectors():
+        raise HTTPException(400, "Unknown sector.")
+    groups = ["large"] + (["mid"] if mid else []) + (["etf"] if etf else [])
+    return {"started": ideas.start_scan(markets, groups, sector or None)}
+
+
+@app.get("/api/ideas/sectors")
+def ideas_sectors():
+    return ideas.sectors()
+
+
+@app.get("/api/ideas/backtest")
+def ideas_backtest(market_name: str = "US"):
+    """Replay of the stage-1 screen over about four years. Computed once a day per market."""
+    import json
+    from datetime import date
+
+    key = f"scanbt:{market_name.upper()}"
+    with connect() as conn:
+        row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    if row and json.loads(row["value"]).get("computed") == date.today().isoformat():
+        return json.loads(row["value"])
+    try:
+        res = ideas.backtest_scanner(market_name.upper())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    res["curves"] = {k: line(v) for k, v in res["curves"].items()}
+    res = clean({**res, "computed": date.today().isoformat()})
+    with connect() as conn:
+        conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, json.dumps(res)))
+    return res
+
+
+@app.get("/api/fundamentals")
+def fundamentals(symbol: str):
+    return clean(market.get_fundamentals(symbol))
+
+
+@app.get("/api/options/strategies")
+def option_strategies(symbol: str):
+    return clean(option_strats.option_strategies(symbol))
+
+
+# ---------------------------------------------------------------- alerts and the daily run
+
+@app.get("/api/alerts")
+def alerts_list():
+    items = alerts.recent()
+    return {"alerts": items, "unread": sum(1 for a in items if not a["read"]), "channels": alerts.channels()}
+
+
+@app.post("/api/alerts/read")
+def alerts_read():
+    alerts.mark_read()
+    return {"ok": True}
+
+
+@app.post("/api/alerts/test")
+def alerts_test():
+    return alerts.raise_alert("test", None, "Test alert from QuantLab. If you can read this on your phone or in your "
+                              "inbox, delivery works.")
+
+
+@app.get("/api/daily")
+def daily_status():
+    return {"last": daily.last_run(), "time": settings.daily_time, "due": daily.is_due()}
+
+
+@app.post("/api/daily/run")
+def daily_run():
+    import threading
+
+    threading.Thread(target=daily.run_daily, daemon=True).start()
+    return {"started": True}
 
 
 # ---------------------------------------------------------------- planning
@@ -392,6 +483,7 @@ class PortfolioBody(BaseModel):
     months: float = Field(ge=1, le=60)
     target_return: float = Field(ge=0, le=5, description="Target return over the period as a decimal, e.g. 0.05")
     market: str = Field(default="US", pattern="^(US|ASX)$")
+    name: str = Field(default="", max_length=60)
 
 
 @app.post("/api/portfolio")
@@ -400,6 +492,108 @@ def portfolio(b: PortfolioBody):
         return clean(planner.build_portfolio(b.equity, b.months, b.target_return, b.market))
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+
+
+@app.post("/api/portfolios")
+def portfolio_save(b: PortfolioBody):
+    """Build the portfolio at current prices and save it for tracking."""
+    try:
+        plan = planner.build_portfolio(b.equity, b.months, b.target_return, b.market)
+        return {"id": tracking.save_portfolio(b.name, plan)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/api/portfolios")
+def portfolio_list():
+    return tracking.list_portfolios()
+
+
+@app.get("/api/portfolios/{portfolio_id}")
+def portfolio_track(portfolio_id: int):
+    try:
+        return clean(tracking.track_portfolio(portfolio_id))
+    except KeyError:
+        raise HTTPException(404, "No such portfolio.")
+
+
+@app.delete("/api/portfolios/{portfolio_id}")
+def portfolio_delete(portfolio_id: int):
+    if not tracking.delete_portfolio(portfolio_id):
+        raise HTTPException(404, "No such portfolio.")
+    return {"ok": True}
+
+
+class HoldingsBody(BaseModel):
+    csv: str = Field(max_length=500_000)
+    market: str = Field(default="US", pattern="^(US|ASX)$")
+    broker: str = Field(default="", max_length=40)
+
+
+class HoldingBody(BaseModel):
+    symbol: str
+    qty: float = Field(ge=0)
+    cost: float | None = Field(default=None, ge=0)
+    broker: str = Field(default="", max_length=40)
+
+
+@app.post("/api/holdings")
+def holding_set(b: HoldingBody):
+    tracking.set_holding(b.symbol, b.qty, b.cost, b.broker)
+    return {"ok": True}
+
+
+class BrokerBody(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+    data: dict = {}
+
+
+@app.get("/api/brokers")
+def broker_list():
+    return {"brokers": brokers.list_brokers(),
+            "fields": [{"key": k, "label": label, "kind": type(default).__name__} for k, (default, label) in brokers.FIELDS.items()]}
+
+
+@app.post("/api/brokers")
+def broker_save(b: BrokerBody):
+    try:
+        return brokers.save_broker(b.name, b.data)
+    except brokers.BrokerError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.delete("/api/brokers")
+def broker_delete(name: str):
+    if not brokers.delete_broker(name):
+        raise HTTPException(404, "No such broker.")
+    return {"ok": True}
+
+
+@app.get("/api/brokers/recommend")
+def broker_recommend(symbol: str, action: str = "buy", value: float = 0.0, instrument: str = "stock",
+                     contracts: int = 1, needs_conditional: bool = False):
+    if action not in ("buy", "sell") or instrument not in ("stock", "option"):
+        raise HTTPException(400, "Action must be buy or sell; instrument must be stock or option.")
+    return clean(brokers.recommend(symbol, action, max(value, 0.0), instrument, max(contracts, 1), needs_conditional))
+
+
+@app.post("/api/holdings/import")
+def holdings_import(b: HoldingsBody):
+    try:
+        return tracking.import_holdings(b.csv, b.market, b.broker)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/api/holdings")
+def holdings():
+    return clean(tracking.holdings_summary())
+
+
+@app.delete("/api/holdings")
+def holdings_clear(broker: str | None = None):
+    tracking.clear_holdings(broker)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- assistant

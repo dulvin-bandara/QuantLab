@@ -66,14 +66,14 @@ class YahooProvider:
             raise DataError(f"No price data found for {symbol}")
         return df
 
-    def history_bulk(self, symbols: list[str]) -> dict[str, pd.DataFrame]:
-        """Two years of daily bars for many tickers in one request. Unknown tickers are left out."""
+    def history_bulk(self, symbols: list[str], period: str = "2y") -> dict[str, pd.DataFrame]:
+        """Daily bars for many tickers in one request. Unknown tickers are left out."""
         import logging
 
         import yfinance as yf
 
         logging.getLogger("yfinance").setLevel(logging.CRITICAL)  # it logs every missing ticker
-        data = yf.download(symbols, period="2y", interval="1d", auto_adjust=True, group_by="ticker",
+        data = yf.download(symbols, period=period, interval="1d", auto_adjust=True, group_by="ticker",
                            progress=False, threads=True)
         out = {}
         for sym in symbols:
@@ -84,6 +84,28 @@ class YahooProvider:
             if not df.empty:
                 out[sym] = df
         return out
+
+    def fundamentals(self, symbol: str) -> dict:
+        import yfinance as yf
+
+        t = yf.Ticker(symbol)
+        i = t.info or {}
+        try:
+            dates = (t.calendar or {}).get("Earnings Date") or []
+        except Exception:
+            dates = []
+        pct = lambda v: v / 100 if isinstance(v, (int, float)) else None  # Yahoo gives these two in percent
+        return {
+            "type": i.get("quoteType"), "sector": i.get("sector"), "industry": i.get("industry"),
+            "market_cap": i.get("marketCap"), "pe": i.get("trailingPE"), "forward_pe": i.get("forwardPE"),
+            "price_to_book": i.get("priceToBook"), "debt_to_equity": pct(i.get("debtToEquity")),
+            "profit_margin": i.get("profitMargins"), "revenue_growth": i.get("revenueGrowth"),
+            "earnings_growth": i.get("earningsGrowth"), "return_on_equity": i.get("returnOnEquity"),
+            "dividend_yield": pct(i.get("dividendYield")), "high_52w": i.get("fiftyTwoWeekHigh"),
+            "low_52w": i.get("fiftyTwoWeekLow"), "analyst_target": i.get("targetMeanPrice"),
+            "analyst_rating": i.get("recommendationKey"),
+            "earnings_dates": [d.isoformat() for d in dates if hasattr(d, "isoformat")],
+        }
 
     def name(self, symbol: str) -> str:
         import yfinance as yf
@@ -164,8 +186,8 @@ def get_history(symbol: str, years: float | None = None) -> pd.DataFrame:
     return df.copy()
 
 
-def get_history_bulk(symbols: list[str]) -> dict[str, pd.DataFrame]:
-    """Two years of daily bars for each of many tickers, fetched together for screening.
+def get_history_bulk(symbols: list[str], period: str = "2y") -> dict[str, pd.DataFrame]:
+    """Daily bars for each of many tickers, fetched together for screening.
 
     Tickers that fail to download are simply missing from the result.
     """
@@ -175,7 +197,7 @@ def get_history_bulk(symbols: list[str]) -> dict[str, pd.DataFrame]:
         out = {}
         for i in range(0, len(symbols), 60):
             try:
-                chunk = _provider.history_bulk(symbols[i:i + 60])
+                chunk = _provider.history_bulk(symbols[i:i + 60], period)
             except Exception:
                 continue
             for sym, df in chunk.items():
@@ -185,7 +207,30 @@ def get_history_bulk(symbols: list[str]) -> dict[str, pd.DataFrame]:
         return out
 
     with _lock:
-        return _cached("bulk:" + ",".join(symbols), settings.price_ttl, fetch)
+        return _cached(f"bulk:{period}:" + ",".join(symbols), settings.price_ttl, fetch)
+
+
+def get_fundamentals(symbol: str) -> dict:
+    """Company facts and the next earnings date. Slow-changing, so reused for 12 hours.
+
+    Never raises: when the data cannot be fetched the fields are simply empty.
+    """
+    from datetime import date
+
+    symbol = normalize_symbol(symbol)
+
+    def fetch():
+        try:
+            return dict(_provider.fundamentals(symbol))
+        except Exception:
+            return {}
+
+    f = dict(_cached(f"fund:{symbol}", 12 * 3600, fetch))
+    today = date.today().isoformat()
+    upcoming = sorted(d for d in f.get("earnings_dates") or [] if d >= today)
+    f["next_earnings"] = upcoming[0] if upcoming else None
+    f["days_to_earnings"] = (date.fromisoformat(upcoming[0]) - date.today()).days if upcoming else None
+    return f
 
 
 def get_name(symbol: str) -> str:

@@ -18,9 +18,11 @@ import pandas as pd
 from .analytics import indicators as ind
 
 MIN_ROWS = 500
+NEWS_DAYS_NEEDED = 60  # days of archived headlines before news sentiment is used as a model input
 
 
-def build_features(df: pd.DataFrame, market: pd.DataFrame | None = None) -> pd.DataFrame:
+def build_features(df: pd.DataFrame, market: pd.DataFrame | None = None,
+                   news_daily: pd.Series | None = None) -> pd.DataFrame:
     c, v = df["Close"], df["Volume"]
     logc = np.log(c)
     f = pd.DataFrame(index=df.index)
@@ -45,6 +47,14 @@ def build_features(df: pd.DataFrame, market: pd.DataFrame | None = None) -> pd.D
         f["mkt_ret_20"] = m.diff(20)
         f["mkt_vol_20"] = m.diff().rolling(20).std()
         f["rel_ret_20"] = f["ret_20"] - f["mkt_ret_20"]
+    if news_daily is not None and len(news_daily) >= NEWS_DAYS_NEEDED:
+        # Average sentiment of the last 5 days with news. Days before the archive began stay empty,
+        # which the model handles natively.
+        # Shifted a day so a bar only ever sees headlines from before it.
+        lagged = news_daily.copy()
+        lagged.index = lagged.index + pd.Timedelta(days=1)
+        s = lagged.reindex(lagged.index.union(df.index)).rolling("5D", min_periods=1).mean()
+        f["news_5d"] = s.reindex(df.index)
     return f.replace([np.inf, -np.inf], np.nan)
 
 
@@ -56,14 +66,23 @@ def _model():
                                           l2_regularization=1.0, min_samples_leaf=40, random_state=0)
 
 
-def forecast(df: pd.DataFrame, market: pd.DataFrame | None = None, horizon: int = 5, folds: int = 5) -> dict:
+def _fit(X: pd.DataFrame, y: pd.Series):
+    """Fit on the columns that have any data in this training window (a new feature such as news
+    sentiment is empty for the early years)."""
+    cols = [c for c in X.columns if X[c].notna().any()]
+    return _model().fit(X[cols], y), cols
+
+
+def forecast(df: pd.DataFrame, market: pd.DataFrame | None = None, horizon: int = 5, folds: int = 5,
+             news_daily: pd.Series | None = None) -> dict:
     """Train, validate walk-forward and predict the latest bar."""
     from sklearn.metrics import roc_auc_score
 
     if len(df) < MIN_ROWS:
         return {"available": False, "reason": f"Needs at least {MIN_ROWS} days of history; {len(df)} available."}
 
-    X = build_features(df, market)
+    X = build_features(df, market, news_daily)
+    news_days = 0 if news_daily is None else len(news_daily)
     fwd = df["Close"].shift(-horizon) / df["Close"] - 1
     y = (fwd > 0).astype(float).where(fwd.notna())
     usable = X.dropna(thresh=int(X.shape[1] * 0.8)).index
@@ -82,8 +101,8 @@ def forecast(df: pd.DataFrame, market: pd.DataFrame | None = None, horizon: int 
         train_end = a - horizon  # gap: the last training labels must not peek into the test block
         if train_end < 200 or yl.iloc[:train_end].nunique() < 2:
             continue
-        m = _model().fit(Xl.iloc[:train_end], yl.iloc[:train_end])
-        oos.iloc[a:b] = m.predict_proba(Xl.iloc[a:b])[:, 1]
+        m, cols = _fit(Xl.iloc[:train_end], yl.iloc[:train_end])
+        oos.iloc[a:b] = m.predict_proba(Xl.iloc[a:b][cols])[:, 1]
 
     scored = oos.dropna()
     yt, ft = yl.loc[scored.index], fl.loc[scored.index]
@@ -94,14 +113,15 @@ def forecast(df: pd.DataFrame, market: pd.DataFrame | None = None, horizon: int 
     # Skill 0 = no better than chance, 1 = AUC of 0.60 or more (strong for daily equity data).
     skill = float(np.clip((auc - 0.5) / 0.10, 0.0, 1.0))
 
-    final = _model().fit(Xl, yl)
-    prob_up = float(final.predict_proba(X.iloc[[-1]])[:, 1][0])
+    final, cols = _fit(Xl, yl)
+    prob_up = float(final.predict_proba(X.iloc[[-1]][cols])[:, 1][0])
     return {
         "available": True,
         "horizon": horizon,
         "as_of": X.index[-1].strftime("%Y-%m-%d"),
         "prob_up": prob_up,
         "skill": skill,
+        "news_feature": {"used": "news_5d" in X.columns, "days_archived": news_days, "days_needed": NEWS_DAYS_NEEDED},
         "validation": {
             "samples": int(len(scored)),
             "from": scored.index[0].strftime("%Y-%m-%d"),

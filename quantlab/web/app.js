@@ -166,6 +166,58 @@ async function dashboardView() {
       asOf ? `Latest bar: ${asOf.as_of}. ` : "", "Click a row for the full breakdown."));
 }
 
+// ---------------------------------------------------------------- ideas
+async function ideasView() {
+  let st = await api("/ideas");
+  const box = h("div", { class: "stack" });
+  const market = h("select", { "aria-label": "Market" }, h("option", { value: "ALL" }, "US and ASX"), h("option", { value: "US" }, "US only"), h("option", { value: "ASX" }, "ASX only"));
+  const btn = h("button", { class: "primary", onclick: async () => { await api("/ideas/scan?market_name=" + market.value, { method: "POST" }); poll(); } }, "Scan now");
+  const progress = h("span", { class: "muted small", role: "status" });
+  const token = render.token;
+  async function poll() {
+    if (render.token !== token) return;  // the user left this screen
+    st = await api("/ideas");
+    draw();
+    if (st.status === "running") setTimeout(poll, 1500);
+  }
+  function draw() {
+    const running = st.status === "running", r = st.result;
+    btn.disabled = running; btn.textContent = running ? "Scanning…" : r ? "Scan again" : "Scan now";
+    progress.textContent = running ? `${st.stage}${st.total ? ` (${st.done} of ${st.total})` : ""}. This takes about a minute.` : "";
+    if (!r) { fill(box, st.error ? errorBox(new Error(st.error)) : h("p", { class: "notice" }, "No scan yet. Press Scan now to search about 170 of the largest US and ASX companies for buy candidates.")); return; }
+    const age = (Date.now() - new Date(r.scanned_at)) / 36e5;
+    const ideaCards = r.ideas.map((it, i) => h("section", { class: "card" },
+      h("div", { class: "row between" },
+        h("div", { class: "row" }, h("span", { class: "muted" }, `#${i + 1}`), h("h2", {}, it.symbol), h("span", { class: "muted" }, it.name), chip(it.label)),
+        h("div", { class: "row" }, h("button", { onclick: () => go("research", it.symbol) }, "Research"), h("button", { class: "primary", onclick: () => go("paper", it.symbol) }, "Paper trade"))),
+      h("div", { class: "tiles", style: "margin:12px 0" },
+        tile("Price", fmt.money(it.price, it.currency)),
+        tile("Score", fmt.snum(it.score), "scale −1 to +1"),
+        tile("Last 20 days", signed(it.ret_20, fmt.spct(it.ret_20))),
+        tile("Last 6 months", signed(it.ret_120, fmt.spct(it.ret_120))),
+        tile("Stop / target", `${fmt.num(it.plan.stop)} / ${fmt.num(it.plan.target)}`, "2 and 3 × ATR"),
+        tile("Suggested size", fmt.int(it.plan.shares) + " sh", `risks ${fmt.int(it.plan.risk_amount)} ${it.currency}`)),
+      h("ul", { class: "reasons" }, it.reasons.map((x) => h("li", {}, x)))));
+    fill(box,
+      st.error ? errorBox(new Error(st.error)) : null,
+      h("p", { class: "muted small" }, `Scanned ${new Date(r.scanned_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}: ${r.screened} of ${r.universe_size} stocks screened`,
+        r.missing ? ` (${r.missing} had no usable data)` : "", `, ${r.shortlisted} got the full signal, ${r.ideas.length} rated Buy or better.`,
+        age > 24 ? " This scan is more than a day old; scan again for current prices." : ""),
+      r.ideas.length ? ideaCards : h("p", { class: "notice" }, "Nothing in this scan rates a Buy. That is a result in itself: when few large stocks are in an uptrend, the app does not force ideas."),
+      h("section", { class: "card" }, h("h2", {}, "Everything screened"),
+        h("p", { class: "muted small", style: "margin-top:-6px" }, "Ranked on price trend and momentum only. The top few per market are then checked with the full signal above. Click a row to research it."),
+        table([{ t: "Symbol", l: 1 }, "Market", "Last", "Quick score", "", "RSI", "20 days", "6 months"], r.table.map((x) => h("tr", { class: "click", onclick: () => go("research", x.symbol) },
+          h("td", {}, h("strong", {}, x.symbol)), h("td", {}, x.market), h("td", { class: "num" }, fmt.money(x.price, x.currency)),
+          h("td", { class: "num" }, fmt.snum(x.score)), h("td", {}, scoreBar(x.score)), h("td", { class: "num" }, fmt.num(x.rsi, 0)),
+          h("td", {}, signed(x.ret_20, fmt.spct(x.ret_20))), h("td", {}, signed(x.ret_120, fmt.spct(x.ret_120))))), { scroll: true })));
+  }
+  draw();
+  if (st.status === "running") onMount(poll);
+  return [h("section", { class: "card" },
+    h("div", { class: "row between" }, h("h2", {}, "Trade ideas"), h("div", { class: "row" }, progress, market, btn)),
+    h("p", { class: "muted small" }, "Scans the largest US and ASX companies and shortlists the ones in the strongest uptrends that the full signal also rates a Buy. Ideas are a starting point for your own check, chosen mostly on trend and momentum; they are not predictions or financial advice.")), box];
+}
+
 // ---------------------------------------------------------------- research
 async function researchView() {
   const sym = state.symbol;
@@ -602,7 +654,7 @@ async function assistantView() {
     h("p", { class: "muted small" }, `Answers come from Claude (${status.model}) using this app's delayed data${status.web_search ? " and web search" : ""}. They are research help, not financial advice, and each question is billed to your Anthropic API key.`));
 }
 
-const VIEWS = { dashboard: dashboardView, research: researchView, options: optionsView, backtest: backtestView, paper: paperView, assistant: assistantView };
+const VIEWS = { dashboard: dashboardView, ideas: ideasView, research: researchView, options: optionsView, backtest: backtestView, paper: paperView, assistant: assistantView };
 
 // ---------------------------------------------------------------- startup
 function showLogin() { $("#login").hidden = false; $("#login-password").focus(); }

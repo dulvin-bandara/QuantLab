@@ -66,6 +66,25 @@ class YahooProvider:
             raise DataError(f"No price data found for {symbol}")
         return df
 
+    def history_bulk(self, symbols: list[str]) -> dict[str, pd.DataFrame]:
+        """Two years of daily bars for many tickers in one request. Unknown tickers are left out."""
+        import logging
+
+        import yfinance as yf
+
+        logging.getLogger("yfinance").setLevel(logging.CRITICAL)  # it logs every missing ticker
+        data = yf.download(symbols, period="2y", interval="1d", auto_adjust=True, group_by="ticker",
+                           progress=False, threads=True)
+        out = {}
+        for sym in symbols:
+            try:
+                df = data[sym].dropna(how="all")
+            except KeyError:
+                continue
+            if not df.empty:
+                out[sym] = df
+        return out
+
     def name(self, symbol: str) -> str:
         import yfinance as yf
 
@@ -143,6 +162,30 @@ def get_history(symbol: str, years: float | None = None) -> pd.DataFrame:
         start = df.index[-1] - pd.Timedelta(days=int(365.25 * years))
         df = df[df.index >= start]
     return df.copy()
+
+
+def get_history_bulk(symbols: list[str]) -> dict[str, pd.DataFrame]:
+    """Two years of daily bars for each of many tickers, fetched together for screening.
+
+    Tickers that fail to download are simply missing from the result.
+    """
+    symbols = [normalize_symbol(s) for s in symbols]
+
+    def fetch():
+        out = {}
+        for i in range(0, len(symbols), 60):
+            try:
+                chunk = _provider.history_bulk(symbols[i:i + 60])
+            except Exception:
+                continue
+            for sym, df in chunk.items():
+                df = _clean(df)
+                if not df.empty:
+                    out[sym] = df
+        return out
+
+    with _lock:
+        return _cached("bulk:" + ",".join(symbols), settings.price_ttl, fetch)
 
 
 def get_name(symbol: str) -> str:

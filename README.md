@@ -34,6 +34,7 @@ Tickers follow Yahoo's convention: `AAPL` for US listings, `BHP.AX` (or `ASX:BHP
 | Screen | What it does |
 |---|---|
 | **Dashboard** | Your watchlist with price, day change, composite signal, forecast probability and news sentiment. |
+| **Ideas** | Scans about 170 of the largest US and ASX companies and shortlists buy candidates, each with reasons, a stop, a target and a position size. |
 | **Research** | Candlestick chart with moving averages, risk statistics (volatility, Sharpe, drawdown, beta), the signal broken into its parts, an ATR-based trade plan, and recent headlines scored for sentiment. |
 | **Options** | Option chain per expiry with implied volatility and Greeks, expected move, put/call ratio, max pain, skew, a volatility smile chart, and a Black-Scholes calculator. |
 | **Backtest** | Run EMA crossover, RSI mean reversion, Donchian breakout or MACD strategies over up to 10 years and compare with buy and hold. |
@@ -64,6 +65,28 @@ Two design choices keep it honest:
 
 Every day's signal is logged, and the Paper trading screen reports what the price actually
 did afterwards, so you can judge the signal on its own record before trusting it.
+
+## Trade ideas
+
+The **Ideas** screen does the first pass of research for you. Press **Scan now** and, in about
+a minute, it:
+
+1. screens every stock in a fixed list of the largest US (about 115) and ASX (about 55)
+   companies on price trend and momentum;
+2. runs the full signal (trend, momentum, ML forecast, news) on the eight strongest per market;
+3. shows only those the full signal rates Buy or better, ranked by score.
+
+What to keep in mind:
+
+- The shortlist is driven mostly by trend and momentum, so it favours stocks that have already
+  risen. An idea flagged "overbought" may be a late entry.
+- It has no view of fundamentals (earnings, valuation, debt) and no knowledge of upcoming
+  events such as earnings dates.
+- When few stocks are in an uptrend, the list is short or empty. That is intended.
+- The universe is edited in `quantlab/ideas.py`.
+
+Use the ideas as candidates to check, then paper trade them and watch the signal track record
+before committing real money.
 
 ## Paper trading options
 
@@ -151,6 +174,7 @@ quantlab/
   backtest.py           strategies and the backtest engine
   forecast.py           ML model with walk-forward validation
   signals.py            composite signal, trade plan, signal track record
+  ideas.py              the stock scanner behind the Ideas screen
   paper.py              paper-trading account (stocks and options)
   chat.py               the assistant and its tools
   api.py                FastAPI server

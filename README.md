@@ -35,6 +35,7 @@ Tickers follow Yahoo's convention: `AAPL` for US listings, `BHP.AX` (or `ASX:BHP
 |---|---|
 | **Dashboard** | Your watchlist with price, day change, composite signal, forecast probability and news sentiment. |
 | **Ideas** | Scans about 170 of the largest US and ASX companies and shortlists buy candidates, each with reasons, a stop, a target and a position size. |
+| **Portfolio** | Builds a whole-share portfolio for an amount, a period and a target return, and says how realistic the target is. |
 | **Research** | Candlestick chart with moving averages, risk statistics (volatility, Sharpe, drawdown, beta), the signal broken into its parts, an ATR-based trade plan, and recent headlines scored for sentiment. |
 | **Options** | Option chain per expiry with implied volatility and Greeks, expected move, put/call ratio, max pain, skew, a volatility smile chart, and a Black-Scholes calculator. |
 | **Backtest** | Run EMA crossover, RSI mean reversion, Donchian breakout or MACD strategies over up to 10 years and compare with buy and hold. |
@@ -87,6 +88,41 @@ What to keep in mind:
 
 Use the ideas as candidates to check, then paper trade them and watch the signal track record
 before committing real money.
+
+## How to buy, and the option alternative
+
+Every idea, and every stock's Research page, has a **How to buy** panel:
+
+- **Minimum money needed**: the smallest purchase (one share in the US; at least A$500 on a
+  first ASX purchase), the account size at which that purchase risks no more than 1% at the
+  stop, and the cost of one option contract.
+- **Ways to buy**: market, limit, pullback-limit and breakout buy-stop orders, each with a
+  suggested price, and which one suits the exchange's session at the time you plan to buy.
+  Pick a date and time, or leave it on now. Outside market hours it steers you to limit
+  orders; in the first half hour and last minutes of a session it advises caution; for a time
+  days away it suggests a resting conditional order instead.
+- **Option alternative** (US stocks): one call option about 45 days out with a delta near
+  0.65, with its cost, breakeven, what it makes at the stock's target and loses at its stop,
+  and warnings about stale quotes, thin trading or wide spreads.
+
+The session logic knows exchange hours and daylight saving but not public holidays. Order
+types are advice for your broker; paper trading inside the app still fills market orders only.
+
+## Portfolio builder
+
+On the **Portfolio** screen, enter an amount, a market (US or ASX), a period in months and the
+return you are aiming for. It opens with an example: 10,000 over 6 months aiming for 5%.
+
+The portfolio is a broad index fund (IVV for the US, VAS.AX for the ASX) for about 40% of the
+invested money, up to six current ideas from the latest scan for the rest, and cash. Your
+target decides how much is invested rather than held as cash, up to 100%; it never borrows.
+
+The screen then says plainly whether the target is realistic, with an estimated chance of
+reaching it, the expected return and a likely range. Those figures rest on stated assumptions:
+cash earns the risk-free rate, the share market earns 5% a year more, and each holding moves
+with the market according to its beta. They deliberately do not assume the ideas keep rising at
+their recent pace, so aggressive targets come back marked unlikely rather than being matched
+with a riskier portfolio. Tax, brokerage and currency conversion are ignored.
 
 ## Paper trading options
 
@@ -175,6 +211,7 @@ quantlab/
   forecast.py           ML model with walk-forward validation
   signals.py            composite signal, trade plan, signal track record
   ideas.py              the stock scanner behind the Ideas screen
+  planner.py            buy guide, option suggestion and portfolio builder
   paper.py              paper-trading account (stocks and options)
   chat.py               the assistant and its tools
   api.py                FastAPI server

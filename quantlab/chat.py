@@ -13,7 +13,7 @@ import json
 import os
 from datetime import date
 
-from . import backtest, ideas, paper, signals
+from . import backtest, ideas, paper, planner, signals
 from .analytics import options as opt
 from .analytics import risk
 from .config import settings
@@ -247,7 +247,48 @@ def get_trade_ideas() -> str:
                   "strongest_screened": slim(res["table"][:15]), "weakest_screened": slim(res["table"][-10:])})
 
 
-TOOL_FUNCTIONS = [get_trade_ideas, get_watchlist, get_signal, get_price_stats, get_news, get_option_expiries, get_option_chain,
+@_safe
+def get_buy_guide(symbol: str, when: str = "") -> str:
+    """Get a practical plan for buying one stock.
+
+    Returns the minimum money needed (one parcel, and the account size at which that parcel fits
+    the 1% risk rule), the order types available with suggested prices and which one suits the
+    exchange's trading session at the given time, the stop-loss and target to place afterwards,
+    and one suggested call option contract (US stocks only) with cost, breakeven and warnings.
+
+    Args:
+        symbol: Ticker in Yahoo format, e.g. AAPL or BHP.AX.
+        when: When the owner plans to buy, as an ISO 8601 date-time with timezone offset
+            (e.g. 2026-11-12T09:45:00-05:00). Leave empty for right now.
+    """
+    from datetime import datetime, timezone
+
+    dt = None
+    if when:
+        dt = datetime.fromisoformat(when.replace("Z", "+00:00"))
+        dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return _json(planner.buy_guide(symbol, dt))
+
+
+@_safe
+def build_portfolio(equity: float, months: float, target_return_pct: float, market_name: str = "US") -> str:
+    """Build a recommended whole-share portfolio for an amount of money, a period and a target return.
+
+    The portfolio is a broad index fund core plus the top ideas from the latest scan, with the
+    rest in cash. Returns the positions, the expected return and a likely range over the period,
+    the estimated probability of reaching the target, and a plain verdict on whether the target
+    is realistic. Report the verdict and probability honestly even when the target is unlikely.
+
+    Args:
+        equity: Amount to invest, in USD for the US market or AUD for the ASX.
+        months: Investment period in months, 1 to 60.
+        target_return_pct: Target total return over the period in percent, e.g. 5 for 5%.
+        market_name: "US" or "ASX".
+    """
+    return _json(planner.build_portfolio(float(equity), float(months), float(target_return_pct) / 100, market_name))
+
+
+TOOL_FUNCTIONS = [get_buy_guide, build_portfolio, get_trade_ideas, get_watchlist, get_signal, get_price_stats, get_news, get_option_expiries, get_option_chain,
                   price_option, run_backtest, get_paper_account]
 
 

@@ -19,6 +19,7 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
     "anthropic>=1.1",
+    "tzdata; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

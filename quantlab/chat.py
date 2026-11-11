@@ -13,7 +13,7 @@ import json
 import os
 from datetime import date
 
-from . import backtest, ideas, paper, planner, signals
+from . import backtest, brokers, ideas, paper, planner, signals, strategies, tracking
 from .analytics import options as opt
 from .analytics import risk
 from .config import settings
@@ -38,7 +38,7 @@ What to know about the data:
 forecast and news sentiment. The ML forecast is only counted when it has shown out-of-sample skill; \
 for most stocks it has little or none, so say so when it matters.
 - Trade ideas come from scanning about 170 of the largest US and ASX stocks; they are a shortlist chosen \
-mostly on trend and momentum, not a forecast.
+mostly on trend and momentum, not a forecast. Bearish ideas are US stocks in downtrends, to be acted on with puts.
 - The paper account is simulated money.
 
 How to answer: lead with the answer, then the numbers behind it. Be direct about uncertainty and \
@@ -288,7 +288,71 @@ def build_portfolio(equity: float, months: float, target_return_pct: float, mark
     return _json(planner.build_portfolio(float(equity), float(months), float(target_return_pct) / 100, market_name))
 
 
-TOOL_FUNCTIONS = [get_buy_guide, build_portfolio, get_trade_ideas, get_watchlist, get_signal, get_price_stats, get_news, get_option_expiries, get_option_chain,
+@_safe
+def get_fundamentals(symbol: str) -> str:
+    """Get company fundamentals and the next earnings date for a ticker.
+
+    Returns sector, market value, price/earnings ratios, debt to equity, profit margin, growth
+    rates, dividend yield, 52-week range, the average analyst price target and rating, and the
+    next earnings date with the number of days until it. Fields are empty when Yahoo has no data.
+
+    Args:
+        symbol: Ticker in Yahoo format, e.g. AAPL or BHP.AX.
+    """
+    return _json(market.get_fundamentals(symbol))
+
+
+@_safe
+def get_option_strategies(symbol: str) -> str:
+    """Get six option strategies built from a US stock's live chain about 45 days out.
+
+    Covers long call, bull call spread, long put, bear put spread, covered call and protective
+    put. Each has its legs with strikes and premiums, cost, maximum profit and loss, breakevens
+    and warnings, plus which one fits the stock's current price signal.
+
+    Args:
+        symbol: US ticker, e.g. AAPL.
+    """
+    res = strategies.option_strategies(symbol)
+    for s in res.get("strategies", []):
+        s.pop("payoff", None)
+    return _json(res)
+
+
+@_safe
+def get_my_holdings() -> str:
+    """Get the owner's real holdings (imported from their broker): value, profit, weight, beta
+    and price signal for each, totals per currency, and warnings about concentration,
+    downtrends and upcoming earnings. Empty if nothing has been imported."""
+    return _json(tracking.holdings_summary())
+
+
+@_safe
+def recommend_broker(symbol: str, action: str = "buy", trade_value: float = 0.0, instrument: str = "stock",
+                     contracts: int = 1) -> str:
+    """Compare the owner's own brokers for one trade and say which is cheapest.
+
+    Uses the fee schedules the owner entered. Returns each broker's estimated commission and
+    currency-conversion cost, brokers that cannot do the trade and why, and the recommended one.
+    Also call get_my_brokers to see the fee schedules themselves.
+
+    Args:
+        symbol: Ticker in Yahoo format, e.g. AAPL or BHP.AX.
+        action: "buy" or "sell".
+        trade_value: Size of the trade in the stock's currency (for options, the total premium).
+        instrument: "stock" or "option".
+        contracts: Number of option contracts, when instrument is "option".
+    """
+    return _json(brokers.recommend(symbol, action, float(trade_value), instrument, int(contracts)))
+
+
+@_safe
+def get_my_brokers() -> str:
+    """List the owner's brokers with the fee schedule and capabilities they entered for each."""
+    return _json(brokers.list_brokers())
+
+
+TOOL_FUNCTIONS = [recommend_broker, get_my_brokers, get_fundamentals, get_option_strategies, get_my_holdings, get_buy_guide, build_portfolio, get_trade_ideas, get_watchlist, get_signal, get_price_stats, get_news, get_option_expiries, get_option_chain,
                   price_option, run_backtest, get_paper_account]
 
 

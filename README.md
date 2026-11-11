@@ -34,12 +34,14 @@ Tickers follow Yahoo's convention: `AAPL` for US listings, `BHP.AX` (or `ASX:BHP
 | Screen | What it does |
 |---|---|
 | **Dashboard** | Your watchlist with price, day change, composite signal, forecast probability and news sentiment. |
-| **Ideas** | Scans about 170 of the largest US and ASX companies and shortlists buy candidates, each with reasons, a stop, a target and a position size. |
+| **Dashboard** also shows | Alerts, and when the daily update last ran. |
+| **Ideas** | Scans large US and ASX companies (optionally mid-sized companies, funds, or one sector) and shortlists buy candidates and bearish candidates, with a test of how the scanner did in the past. |
 | **Portfolio** | Builds a whole-share portfolio for an amount, a period and a target return, and says how realistic the target is. |
 | **Research** | Candlestick chart with moving averages, risk statistics (volatility, Sharpe, drawdown, beta), the signal broken into its parts, an ATR-based trade plan, and recent headlines scored for sentiment. |
 | **Options** | Option chain per expiry with implied volatility and Greeks, expected move, put/call ratio, max pain, skew, a volatility smile chart, and a Black-Scholes calculator. |
 | **Backtest** | Run EMA crossover, RSI mean reversion, Donchian breakout or MACD strategies over up to 10 years and compare with buy and hold. |
-| **Paper trading** | Simulated USD and AUD accounts for stocks and options, positions with P&L, beta and delta, trade history, and a track record of how past signals turned out. |
+| **My portfolio** | Your real holdings by broker, your brokers' fees, and the cheapest broker for any trade. |
+| **Paper trading** | Market, limit, stop and bracket orders in simulated USD and AUD accounts for stocks and options, positions with P&L, beta and delta, trade history, and a track record of how past signals turned out. |
 | **Assistant** | Ask questions in plain English; Claude answers by looking up the app's live data. |
 
 ## How the signal works
@@ -77,12 +79,25 @@ a minute, it:
 2. runs the full signal (trend, momentum, ML forecast, news) on the eight strongest per market;
 3. shows only those the full signal rates Buy or better, ranked by score.
 
+Options on the scan: tick **Mid-sized** to add about 70 mid-sized and growth companies, tick
+**Funds** to add index and sector funds, or pick one **sector**. The four weakest US stocks are
+checked too, and any the full signal rates Sell appear as **bearish ideas**, to be acted on
+with put options. Each idea shows its price/earnings ratio and next earnings date, and warns
+when earnings are within two weeks.
+
+**Has this scanner worked in the past?** The buttons at the bottom of the screen replay the
+price screen week by week over about four years, using only prices known at each point, and
+compare its picks with holding every stock in the list equally. When this was built, the US
+replay beat its universe by about 5% a year and the ASX replay trailed its universe by about
+12% a year, so treat ASX ideas with more suspicion. The replay covers the price screen only
+and uses today's list of big companies, which flatters all the results.
+
 What to keep in mind:
 
 - The shortlist is driven mostly by trend and momentum, so it favours stocks that have already
   risen. An idea flagged "overbought" may be a late entry.
-- It has no view of fundamentals (earnings, valuation, debt) and no knowledge of upcoming
-  events such as earnings dates.
+- Company facts (valuation, debt, margins, earnings date) are shown for context on each
+  Research page, but the signal itself still runs on price and news only.
 - When few stocks are in an uptrend, the list is short or empty. That is intended.
 - The universe is edited in `quantlab/ideas.py`.
 
@@ -106,7 +121,60 @@ Every idea, and every stock's Research page, has a **How to buy** panel:
   and warnings about stale quotes, thin trading or wide spreads.
 
 The session logic knows exchange hours and daylight saving but not public holidays. Order
-types are advice for your broker; paper trading inside the app still fills market orders only.
+types are advice for your broker, and the stock ticket on the Paper trading screen lets you practise the same market, limit, stop and bracket orders.
+
+## Daily update and alerts
+
+Once a day QuantLab refreshes every watchlist signal, archives news, fills any paper orders
+that triggered, records the paper account's value, runs the ideas scan and raises alerts. The
+signal track record and news archive only grow on days this runs.
+
+- **While the app is open** it runs by itself at 18:00 local time (`QUANTLAB_DAILY_TIME`, or
+  `off`), and catches up at start-up if it missed a day. The Dashboard has a button to run it now.
+- **With the app closed**, have your computer's scheduler run this once a day:
+
+  ```bash
+  python -m quantlab daily
+  ```
+
+  On Windows, this registers it for 6 pm every day (adjust the folder; not yet tried on a real
+  Windows machine):
+
+  ```powershell
+  schtasks /Create /SC DAILY /ST 18:00 /TN "QuantLab daily" /TR "cmd /c cd /d C:\Users\you\QuantLab && python -m quantlab daily"
+  ```
+
+**Alerts** appear on the Dashboard when a watchlist signal changes, a paper order fills, a new
+idea appears, or a stock you follow reports earnings within three days. To get them away from
+the app:
+
+- **Phone**: install the free [ntfy](https://ntfy.sh) app, subscribe to a long made-up topic
+  name, and set `QUANTLAB_NTFY_TOPIC` to the same name. Anyone who knows the topic can read
+  the alerts, so make it hard to guess.
+- **Email**: set `QUANTLAB_SMTP_HOST`, `QUANTLAB_SMTP_USER`, `QUANTLAB_SMTP_PASSWORD` and
+  `QUANTLAB_ALERT_EMAIL`.
+
+Use **Send a test alert** on the Dashboard to check delivery. Neither channel could be tried
+during development, so that test is worth doing.
+
+## My portfolio and brokers
+
+The **My portfolio** screen holds what you really own and where.
+
+- **Brokers.** Add each trading provider with the fees from its current price list: fixed fee,
+  percentage and minimum for US and ASX shares, the fee per option contract, the currency
+  conversion percentage, and what it supports. QuantLab does not know any broker's real fees;
+  it only uses what you type.
+- **Holdings.** Import a CSV export per broker, or add positions by hand. You see value,
+  profit, weight, beta and trend for each, the split across brokers, and warnings about
+  concentration, downtrends and upcoming earnings. The app never trades these.
+- **Which broker for this trade?** Enter a ticker, what you want to do and the size. It costs
+  the trade at each broker (commission plus conversion), leaves out brokers that cannot do it,
+  and only considers brokers holding the shares when you are selling. The same recommendation
+  appears in each stock's How to buy panel and beside each line of the portfolio builder.
+
+Holdings you import are counted by the portfolio builder (a **To buy** column shows what is
+missing) and by the daily earnings alerts.
 
 ## Portfolio builder
 
@@ -122,7 +190,27 @@ reaching it, the expected return and a likely range. Those figures rest on state
 cash earns the risk-free rate, the share market earns 5% a year more, and each holding moves
 with the market according to its beta. They deliberately do not assume the ideas keep rising at
 their recent pace, so aggressive targets come back marked unlikely rather than being matched
-with a riskier portfolio. Tax, brokerage and currency conversion are ignored.
+with a riskier portfolio. Tax is ignored.
+
+**Save and track.** Give a built portfolio a name and save it. Tracking then shows its value
+against the path your target needs and against the same money in the index, and suggests what
+to do: sell a holding that has gone through its stop, review one whose trend has turned, or
+trim and add when weights drift more than five points from where they started.
+
+## Paper trading orders
+
+The stock ticket on the Paper trading screen takes three order types:
+
+- **Market** fills now at the latest delayed price.
+- **Limit** and **stop** orders wait. Each later day's high and low is checked: a buy limit
+  fills when the price trades down to it, a buy stop when it trades up through it. A day that
+  opens beyond the order price fills at the open.
+- A buy can carry a **stop-loss** and a **take-profit**. When the buy fills, both sell orders
+  are placed; whichever triggers first cancels the other.
+
+Because only daily highs and lows are known, the order of events inside one day is not. If a
+stop-loss and a take-profit could both have triggered on the same day, the stop is assumed to
+have come first.
 
 ## Paper trading options
 
@@ -136,6 +224,11 @@ Open a US ticker's **Options** screen, pick an expiry, and use the ticket above 
 - Open positions are valued at the bid/ask midpoint, with delta shown as equivalent shares.
 - Contracts past their expiry date are settled automatically at intrinsic value.
 - Commission is 0.65 per contract (`QUANTLAB_PAPER_OPTION_FEE`).
+
+The Options screen also has an **Option strategies** panel: long call, bull call spread, long
+put, bear put spread, covered call and protective put, each built from contracts about 45 days
+out, with cost, best and worst case, breakeven and a payoff chart. Spreads and covered calls
+are for study and for your real broker; the paper account still buys single calls and puts.
 
 ## The assistant
 
@@ -161,6 +254,18 @@ Each question is billed to that key. The model defaults to `claude-opus-5-5`
 web, if web search is enabled for your Anthropic account. If a request is declined by a safety
 filter, the API is allowed to retry it on a fallback model.
 
+## News, read two ways
+
+By default each headline gets a word-based sentiment score. With an Anthropic API key and
+`QUANTLAB_AI_NEWS=1`, Claude reads each new headline instead: it judges what the news means
+for the share price and discards headlines that are not really about the company. That costs
+a small amount per batch of headlines on your key (`QUANTLAB_NEWS_MODEL` sets the model,
+`claude-opus-5-5` by default). This path has been tested with a stand-in for the API, not a
+live key.
+
+Once 60 days of headlines are archived for a stock, their sentiment becomes an input to that
+stock's forecast model. Until then the Research page reports how many days have been collected.
+
 ## Known limits
 
 - **ASX option chains** are not available from the free source. The option calculator works for any ticker.
@@ -168,9 +273,10 @@ filter, the API is allowed to retry it on a fallback model.
   volatilities are only reliable during the session. Pricing is Black-Scholes, an approximation
   for American-style options.
 - **News history cannot be backfilled.** Headlines are archived from the day you start running
-  the app, so news sentiment feeds the live signal but not yet the ML model's training.
+  the app, so the forecast only starts using news after about two months of daily runs.
 - **Headline sentiment is coarse**: a word-based score of the headline only.
-- **Paper trading** is long-only: no short selling, no writing options, market orders only.
+- **Paper trading** is long-only: no short selling and no writing options. Resting orders are
+  judged on daily highs and lows, not tick by tick.
 - **The assistant** sees the same delayed data as the rest of the app and has not been exercised
   against a live API key in development; conversations are kept only in the browser tab.
 - Prices are end-of-day or delayed; this is built for swing trading (days to weeks), not intraday.
@@ -193,7 +299,11 @@ All optional, set as environment variables:
 | `QUANTLAB_PAPER_START_CASH` | `100000` | Starting cash in each paper account |
 | `QUANTLAB_PAPER_SLIPPAGE_BPS` / `QUANTLAB_PAPER_COMMISSION_BPS` | `5` / `5` | Stock paper trading costs |
 | `QUANTLAB_PAPER_OPTION_FEE` | `0.65` | Commission per option contract |
-| `ANTHROPIC_API_KEY` | none | Enables the assistant |
+| `QUANTLAB_DAILY_TIME` | `18:00` | Local time of the automatic daily update while the app is open; `off` disables it |
+| `QUANTLAB_NTFY_TOPIC` | none | ntfy topic for phone alerts |
+| `QUANTLAB_SMTP_HOST`, `_PORT`, `_USER`, `_PASSWORD`, `QUANTLAB_ALERT_EMAIL` | none | Email alerts |
+| `QUANTLAB_AI_NEWS` | off | Set to `1` to have Claude score news headlines |
+| `ANTHROPIC_API_KEY` | none | Enables the assistant and Claude-scored news |
 | `QUANTLAB_CHAT_MODEL` | `claude-opus-5-5` | Model the assistant uses |
 | `QUANTLAB_CHAT_WEB_SEARCH` | off | Set to `1` to let the assistant search the web |
 | `QUANTLAB_RISK_FREE_USD` / `QUANTLAB_RISK_FREE_AUD` | `0.04` | Annual risk-free rates for Sharpe and option pricing |
@@ -212,6 +322,11 @@ quantlab/
   signals.py            composite signal, trade plan, signal track record
   ideas.py              the stock scanner behind the Ideas screen
   planner.py            buy guide, option suggestion and portfolio builder
+  strategies.py         option strategies and payoffs
+  brokers.py            your brokers' fees and the cheapest broker for a trade
+  tracking.py           real holdings and saved portfolios
+  daily.py              the daily update and its scheduler
+  alerts.py             alerts and their delivery
   paper.py              paper-trading account (stocks and options)
   chat.py               the assistant and its tools
   api.py                FastAPI server

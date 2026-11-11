@@ -27,8 +27,15 @@ class FakeProvider:
             raise DataError("No price data found for NOPE")
         return make_prices(seed=sum(map(ord, symbol)))
 
-    def history_bulk(self, symbols):
-        return {s: make_prices(520, seed=sum(map(ord, s))) for s in symbols if s != "NOPE"}
+    def history_bulk(self, symbols, period="2y"):
+        n = 520 if period == "2y" else 1300
+        return {s: make_prices(n, seed=sum(map(ord, s))) for s in symbols if s != "NOPE"}
+
+    def fundamentals(self, symbol):
+        soon = (pd.Timestamp.today() + pd.Timedelta(days=5)).date().isoformat()
+        return {"type": "EQUITY", "sector": "Technology", "pe": 25.0, "forward_pe": 22.0, "market_cap": 5e10,
+                "debt_to_equity": 0.8, "profit_margin": 0.2, "dividend_yield": 0.01,
+                "earnings_dates": ["2001-01-01", soon]}
 
     def name(self, symbol):
         return f"{symbol} Corp"

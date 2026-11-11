@@ -131,7 +131,7 @@ def test_chat_endpoint(monkeypatch):
     assert r.json() == {"reply": "AAPL is a **Buy**.", "tools_used": ["get_signal"]}
     assert seen["model"] == "claude-opus-5-5" and len(seen["messages"]) == 3
     assert "AAPL open in the app" in seen["system"][1]["text"]
-    assert len(seen["tools"]) == len(chat.TOOL_FUNCTIONS) == 12
+    assert len(seen["tools"]) == len(chat.TOOL_FUNCTIONS) == 17
     assert client.post("/api/chat", json={"messages": [{"role": "system", "content": "x"}]}).status_code == 422
 
 
@@ -149,10 +149,11 @@ def test_ideas_scan_ranks_and_filters():
     st = client.get("/api/ideas").json()
     res = st["result"]
     assert st["status"] == "idle" and st["error"] is None
-    assert res["screened"] == res["universe_size"] == len(ideas.US_UNIVERSE) + len(ideas.ASX_UNIVERSE)
+    assert res["screened"] == res["universe_size"] == len(ideas.universe("US")) + len(ideas.universe("ASX"))
     scores = [r["score"] for r in res["table"]]
     assert scores == sorted(scores, reverse=True)
-    assert res["shortlisted"] <= 2 * ideas.SHORTLIST
+    assert res["shortlisted"] <= 2 * ideas.SHORTLIST + ideas.BEAR_SHORTLIST
+    assert all(b["score"] <= -0.2 and b["market"] == "US" for b in res["bearish"])
     assert res["ideas"], "random-walk test data still yields some uptrends"
     for idea in res["ideas"]:
         assert idea["score"] >= 0.2 and idea["label"] in ("Buy", "Strong Buy")
@@ -163,6 +164,10 @@ def test_ideas_scan_ranks_and_filters():
 def test_universes_are_valid_unique_tickers():
     from quantlab import ideas
 
-    for universe in ideas.UNIVERSES.values():
-        assert len(universe) == len(set(universe))
-        assert all(market.normalize_symbol(s) == s for s in universe)
+    for m in ideas.UNIVERSE:
+        names = [t for g in ideas.UNIVERSE[m].values() for tickers in g.values() for t in tickers.split()]
+        assert len(names) == len(set(names)), [n for n in names if names.count(n) > 1]
+        everything = ideas.universe(m, ("large", "mid", "etf"))
+        assert len(everything) == len(names) and all(market.normalize_symbol(s) == s for s in everything)
+    tech = ideas.universe("US", ("large", "mid"), "Technology")
+    assert "AAPL" in tech and "DDOG" in tech and "JPM" not in tech and "Technology" in ideas.sectors()

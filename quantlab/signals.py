@@ -111,7 +111,7 @@ def compute_signal(symbol: str, use_ml: bool = True, use_news: bool = True) -> d
             bench = market.get_history(market.benchmark_of(symbol))
         except market.DataError:
             bench = None
-        fc = forecast(df, bench)
+        fc = forecast(df, bench, news_daily=news.daily_sentiment(symbol) if use_news else None)
         if fc["available"]:
             s = (fc["prob_up"] - 0.5) * 2 * fc["skill"]
             v = fc["validation"]

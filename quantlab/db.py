@@ -19,6 +19,10 @@ CREATE TABLE IF NOT EXISTS signal_log (
 );
 CREATE TABLE IF NOT EXISTS paper_cash (currency TEXT PRIMARY KEY, amount REAL, start REAL);
 CREATE TABLE IF NOT EXISTS paper_positions (symbol TEXT PRIMARY KEY, qty REAL, avg_cost REAL, currency TEXT);
+CREATE TABLE IF NOT EXISTS paper_options (
+    contract TEXT PRIMARY KEY, symbol TEXT, expiry TEXT, strike REAL, kind TEXT,
+    qty REAL, avg_cost REAL, currency TEXT
+);
 CREATE TABLE IF NOT EXISTS paper_trades (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, symbol TEXT, side TEXT, qty REAL,
     price REAL, commission REAL, currency TEXT, realized REAL, note TEXT

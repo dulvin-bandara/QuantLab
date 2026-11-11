@@ -5,7 +5,8 @@ data, news sentiment, a machine-learning forecast, strategy backtesting, option 
 and a paper-trading account, all behind a web interface you can run locally or on your own domain.
 
 Everything runs on free data (Yahoo Finance prices and option chains, Yahoo and Google News
-headlines). No API keys are needed.
+headlines). No API keys are needed, except for the optional assistant, which uses your own
+Anthropic API key.
 
 > QuantLab is a research tool. Its signals and forecasts are not financial advice, free data
 > is delayed and occasionally wrong, and paper trades use simulated money.
@@ -36,7 +37,8 @@ Tickers follow Yahoo's convention: `AAPL` for US listings, `BHP.AX` (or `ASX:BHP
 | **Research** | Candlestick chart with moving averages, risk statistics (volatility, Sharpe, drawdown, beta), the signal broken into its parts, an ATR-based trade plan, and recent headlines scored for sentiment. |
 | **Options** | Option chain per expiry with implied volatility and Greeks, expected move, put/call ratio, max pain, skew, a volatility smile chart, and a Black-Scholes calculator. |
 | **Backtest** | Run EMA crossover, RSI mean reversion, Donchian breakout or MACD strategies over up to 10 years and compare with buy and hold. |
-| **Paper trading** | Simulated USD and AUD accounts, order ticket, positions with P&L and beta, trade history, and a track record of how past signals turned out. |
+| **Paper trading** | Simulated USD and AUD accounts for stocks and options, positions with P&L, beta and delta, trade history, and a track record of how past signals turned out. |
+| **Assistant** | Ask questions in plain English; Claude answers by looking up the app's live data. |
 
 ## How the signal works
 
@@ -63,6 +65,43 @@ Two design choices keep it honest:
 Every day's signal is logged, and the Paper trading screen reports what the price actually
 did afterwards, so you can judge the signal on its own record before trusting it.
 
+## Paper trading options
+
+Open a US ticker's **Options** screen, pick an expiry, and use the ticket above the chain
+(clicking a row in the chain loads that strike). One contract covers 100 shares.
+
+- You can buy calls and puts and sell what you hold. Writing (shorting) options and multi-leg
+  orders are not simulated.
+- Buys fill at the ask and sells at the bid. When Yahoo has no live quote, which is usual
+  outside US market hours, both use the last traded price, and the fill says so.
+- Open positions are valued at the bid/ask midpoint, with delta shown as equivalent shares.
+- Contracts past their expiry date are settled automatically at intrinsic value.
+- Commission is 0.65 per contract (`QUANTLAB_PAPER_OPTION_FEE`).
+
+## The assistant
+
+The **Assistant** tab answers questions such as "what's driving the signal on BHP.AX?" or
+"what move are options pricing in for AAPL next month?". It uses Claude with read-only tools
+over this app's data: quotes, signals, news, option chains, backtests and the paper account.
+It cannot place trades.
+
+To turn it on, create an API key at https://console.anthropic.com and set it before starting the app:
+
+```bash
+export ANTHROPIC_API_KEY=your-key
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:ANTHROPIC_API_KEY = "your-key"
+```
+
+Each question is billed to that key. The model defaults to `claude-opus-5-5`
+(`QUANTLAB_CHAT_MODEL` changes it). Set `QUANTLAB_CHAT_WEB_SEARCH=1` to also let it search the
+web, if web search is enabled for your Anthropic account. If a request is declined by a safety
+filter, the API is allowed to retry it on a fallback model.
+
 ## Known limits
 
 - **ASX option chains** are not available from the free source. The option calculator works for any ticker.
@@ -72,30 +111,52 @@ did afterwards, so you can judge the signal on its own record before trusting it
 - **News history cannot be backfilled.** Headlines are archived from the day you start running
   the app, so news sentiment feeds the live signal but not yet the ML model's training.
 - **Headline sentiment is coarse**: a word-based score of the headline only.
-- **Paper trading** covers long stock positions with market orders; options and short selling are not simulated.
+- **Paper trading** is long-only: no short selling, no writing options, market orders only.
+- **The assistant** sees the same delayed data as the rest of the app and has not been exercised
+  against a live API key in development; conversations are kept only in the browser tab.
 - Prices are end-of-day or delayed; this is built for swing trading (days to weeks), not intraday.
 
-## Putting it on your own domain
+## Putting it on your own domain, privately
 
-The repo includes a Docker setup with [Caddy](https://caddyserver.com), which obtains an HTTPS
-certificate automatically. On a server (any small VPS) with Docker installed:
+QuantLab can live at a path such as `https://example.com/quantlab/` beside an existing website.
+Three things keep it private:
 
-1. Point a DNS `A` record for your domain or subdomain at the server's IP address.
-2. Create the settings file and fill in both values:
+- **Password login.** With `QUANTLAB_PASSWORD` set, every screen and every data request needs
+  a login. The session lasts 7 days and repeated wrong guesses are locked out for a few minutes.
+- **HTTPS.** The web server in front encrypts everything in transit, including the password.
+  Never expose the app over plain `http://`.
+- **Unlisted.** Nothing links to it, and every response tells search engines not to index it.
+  Treat this as tidiness, not security: the password is the protection.
 
-   ```bash
-   cp .env.example .env
-   ```
+QuantLab is a Python program, so it needs a machine that can run it (a small VPS is enough).
+A static host (GitHub Pages, Netlify, Vercel static sites and similar) cannot run it by itself.
+How you connect it depends on where your website is hosted today:
 
-3. Start it:
+**Your site runs on a server you control with nginx.** Run QuantLab on that server and add the
+two `location` blocks from `deploy/nginx-quantlab.conf` to the site's existing HTTPS server block.
 
-   ```bash
-   docker compose up -d --build
-   ```
+**Your site runs on a server you control with Caddy, or you are starting fresh.** Use the
+included Docker setup: point the domain's DNS `A` record at the server, then
 
-The app is then at `https://your-domain`, behind the password you set. Always set
-`QUANTLAB_PASSWORD` when the app is reachable from the internet. The Docker files have not been
-exercised on a live server yet, so treat the first deployment as a test.
+```bash
+cp .env.example .env
+```
+
+fill in the domain and password, replace the final `handle` block in `Caddyfile` with your
+existing site, and start it:
+
+```bash
+docker compose up -d --build
+```
+
+**Your site is on a static or managed host.** Run QuantLab on a separate small server and
+either use a subdomain (for example `quantlab.example.com`, one DNS record) or, if your host
+supports proxy rewrites, forward `/quantlab/*` to that server.
+
+The web interface uses relative addresses, so it works at any path as long as the proxy strips
+the prefix (both provided configs do). This was tested locally under `/quantlab/` with login;
+the Docker and nginx files have not been run on a live server, so treat the first deployment
+as a test.
 
 ## Settings
 
@@ -106,7 +167,11 @@ All optional, set as environment variables:
 | `QUANTLAB_PASSWORD` | none | Password for the web app; no login when unset |
 | `QUANTLAB_DATA_DIR` | `data` | Where the database and price cache live |
 | `QUANTLAB_PAPER_START_CASH` | `100000` | Starting cash in each paper account |
-| `QUANTLAB_PAPER_SLIPPAGE_BPS` / `QUANTLAB_PAPER_COMMISSION_BPS` | `5` / `5` | Paper trading costs |
+| `QUANTLAB_PAPER_SLIPPAGE_BPS` / `QUANTLAB_PAPER_COMMISSION_BPS` | `5` / `5` | Stock paper trading costs |
+| `QUANTLAB_PAPER_OPTION_FEE` | `0.65` | Commission per option contract |
+| `ANTHROPIC_API_KEY` | none | Enables the assistant |
+| `QUANTLAB_CHAT_MODEL` | `claude-opus-5-5` | Model the assistant uses |
+| `QUANTLAB_CHAT_WEB_SEARCH` | off | Set to `1` to let the assistant search the web |
 | `QUANTLAB_RISK_FREE_USD` / `QUANTLAB_RISK_FREE_AUD` | `0.04` | Annual risk-free rates for Sharpe and option pricing |
 
 ## Code layout
@@ -121,7 +186,8 @@ quantlab/
   backtest.py           strategies and the backtest engine
   forecast.py           ML model with walk-forward validation
   signals.py            composite signal, trade plan, signal track record
-  paper.py              paper-trading account
+  paper.py              paper-trading account (stocks and options)
+  chat.py               the assistant and its tools
   api.py                FastAPI server
   web/                  the browser interface (no build step)
 tests/                  run with: python -m pytest

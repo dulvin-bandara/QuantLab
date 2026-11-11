@@ -1,4 +1,4 @@
-# Puts QuantLab on your own domain with automatic HTTPS (Caddy fetches the certificate).
+# Puts QuantLab at https://<your domain>/quantlab/ with automatic HTTPS (Caddy fetches the certificate).
 # 1. Point your domain's DNS A record at this server.
 # 2. Copy .env.example to .env and fill in QUANTLAB_DOMAIN and QUANTLAB_PASSWORD.
 # 3. docker compose up -d --build
@@ -8,6 +8,8 @@ services:
     restart: unless-stopped
     environment:
       QUANTLAB_PASSWORD: ${QUANTLAB_PASSWORD:?Set QUANTLAB_PASSWORD in .env}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      QUANTLAB_CHAT_WEB_SEARCH: ${QUANTLAB_CHAT_WEB_SEARCH:-}
     volumes:
       - quantlab-data:/data
 

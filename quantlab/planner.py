@@ -245,7 +245,7 @@ def buy_guide(symbol: str, when: datetime | None = None) -> dict:
                           "buy it, not whether to.",
         "caveats": ["Public holidays and half-days are not known to the app.",
                     "Prices are delayed; check your broker's live quote before placing any order.",
-                    "Paper trading in this app fills market orders only."],
+                    "You can practise these order types with simulated money on the Paper trading screen."],
     }
 
 

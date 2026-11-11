@@ -116,3 +116,7 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 details.guide { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
 details.guide summary { cursor: pointer; color: var(--accent); font-weight: 600; }
 td.wrap { white-space: normal; min-width: 220px; color: var(--text-2); font-size: 13px; }
+.meter { width: 120px; height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--series-1); border-radius: 4px; }
+input[type=checkbox] { width: auto; }
+input[type=file] { border: 0; padding: 0; background: none; }

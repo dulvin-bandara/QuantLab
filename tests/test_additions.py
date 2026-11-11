@@ -313,3 +313,26 @@ def test_holdings_split_by_broker_and_selling_where_held():
     assert client.delete("/api/brokers", params={"name": "Third"}).status_code == 200
     guide = planner.buy_guide("AAPL")
     assert guide["broker"]["available"] and guide["option_broker"]["recommended"] == "GlobalX"
+
+
+def test_database_setup_survives_simultaneous_first_use(tmp_path, monkeypatch):
+    """A page load fires several requests at once; on a brand-new database they must not collide."""
+    import threading
+
+    from quantlab import db
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "fresh")
+    (tmp_path / "fresh").mkdir()
+    errors = []
+
+    def use():
+        try:
+            with db.connect() as conn:
+                conn.execute("SELECT ai_sentiment, relevant FROM news").fetchall()
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=use) for _ in range(12)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert errors == []

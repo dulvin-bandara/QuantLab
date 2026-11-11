@@ -159,11 +159,232 @@ async function dashboardView() {
     } }, "✕");
   }
   const asOf = rows.find((r) => r.as_of);
-  return h("section", { class: "card" },
+  return [alertsCard(), h("section", { class: "card" },
     h("div", { class: "row between" }, h("h2", {}, "Watchlist"), add), err,
     table(["Symbol", "Last", "Day", "60 days", "Signal", "Score", "P(up, 5d)", "News", ""], body, { empty: "Add a ticker to get started." }),
     h("p", { class: "muted small" }, "Score blends trend, momentum, the ML forecast and news sentiment on a −1 to +1 scale. ",
-      asOf ? `Latest bar: ${asOf.as_of}. ` : "", "Click a row for the full breakdown."));
+      asOf ? `Latest bar: ${asOf.as_of}. ` : "", "Click a row for the full breakdown."))];
+}
+
+// ---------------------------------------------------------------- alerts and the daily run
+function alertsCard() {
+  const box = h("section", { class: "card" }, h("h2", {}, "Alerts"), loading());
+  async function load() {
+    const [a, d] = await Promise.all([api("/alerts"), api("/daily")]);
+    const last = d.last && d.last.finished ? new Date(d.last.finished).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : null;
+    const push = [a.channels.ntfy ? "phone push" : null, a.channels.email ? "email" : null].filter(Boolean);
+    const runBtn = h("button", { onclick: async () => { runBtn.disabled = true; runBtn.textContent = "Running… (a few minutes)"; await api("/daily/run", { method: "POST" }); setTimeout(wait, 5000); } }, "Run daily update now");
+    async function wait() { const now = await api("/daily"); if (now.last && (!d.last || now.last.started !== d.last.started) && now.last.finished) render(); else setTimeout(wait, 5000); }
+    fill(box,
+      h("div", { class: "row between" }, h("h2", {}, "Alerts", a.unread ? h("span", { class: "chip", style: "margin-left:8px" }, `${a.unread} new`) : null),
+        h("div", { class: "row" }, runBtn,
+          h("button", { onclick: async () => { await api("/alerts/test", { method: "POST" }); load(); } }, "Send a test alert"),
+          a.unread ? h("button", { onclick: async () => { await api("/alerts/read", { method: "POST" }); load(); } }, "Mark all read") : null)),
+      a.alerts.length ? h("ul", { class: "news scroll", style: "margin-top:12px;max-height:220px" }, a.alerts.map((x) => h("li", {},
+        h("span", { class: "dot" + (x.read ? "" : " pos"), title: x.read ? "Read" : "New" }),
+        h("div", {}, x.read ? x.message : h("strong", {}, x.message), h("div", { class: "muted small" }, `${new Date(x.ts).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })} · ${x.kind}`)))))
+        : h("p", { class: "muted", style: "margin-top:10px" }, "No alerts yet. You are told when a watchlist signal changes, a paper order fills, a new idea appears, or a stock you follow is about to report earnings."),
+      h("p", { class: "muted small" }, last ? `Daily update last ran ${last}: ${d.last.signals} signals refreshed, ${(d.last.changes || []).length} changed, ${d.last.ideas ?? 0} ideas.` : "The daily update has not run yet.",
+        d.time.toLowerCase() === "off" ? " Automatic runs are switched off." : ` It runs automatically at ${d.time} while the app is open.`,
+        push.length ? ` Alerts are also sent by ${push.join(" and ")}.` : " Alerts only show here until phone push or email is set up (see the README)."));
+  }
+  load().catch((e) => fill(box, h("h2", {}, "Alerts"), errorBox(e)));
+  return box;
+}
+
+// ---------------------------------------------------------------- fundamentals
+function fundamentalsCard(symbol) {
+  const box = h("section", { class: "card" }, h("h2", {}, "Company facts"), loading());
+  api("/fundamentals?symbol=" + encodeURIComponent(symbol)).then((f) => {
+    const big = (v) => v == null ? dash : v >= 1e12 ? fmt.num(v / 1e12, 2) + " tn" : v >= 1e9 ? fmt.num(v / 1e9, 1) + " bn" : fmt.num(v / 1e6, 0) + " m";
+    const soon = f.days_to_earnings != null && f.days_to_earnings <= 14;
+    if (!f.sector && f.pe == null && f.market_cap == null) { fill(box, h("h2", {}, "Company facts"), h("p", { class: "muted" }, "No company data is available for this ticker.")); return; }
+    fill(box,
+      h("div", { class: "row between" }, h("h2", {}, "Company facts"), h("span", { class: "muted small" }, [f.sector, f.industry].filter(Boolean).join(" · "))),
+      soon ? h("p", { class: "notice", style: "margin-top:10px" }, `Earnings are due on ${f.next_earnings}, ${f.days_to_earnings} day${f.days_to_earnings === 1 ? "" : "s"} away. Results can move the price sharply in either direction, whatever the trend says.`) : null,
+      h("div", { class: "tiles", style: "margin-top:12px" },
+        tile("Market value", big(f.market_cap)),
+        tile("Price / earnings", f.pe == null ? dash : fmt.num(f.pe, 1), f.forward_pe == null ? "" : `${fmt.num(f.forward_pe, 1)} on next year's forecast`),
+        tile("Next earnings", f.next_earnings || dash, f.days_to_earnings == null ? "" : `in ${f.days_to_earnings} days`),
+        tile("Profit margin", fmt.pct(f.profit_margin)),
+        tile("Revenue growth", f.revenue_growth == null ? dash : fmt.spct(f.revenue_growth), "year on year"),
+        tile("Debt to equity", f.debt_to_equity == null ? dash : fmt.num(f.debt_to_equity, 2)),
+        tile("Dividend yield", fmt.pct(f.dividend_yield, 2)),
+        tile("52-week range", f.low_52w == null ? dash : `${fmt.num(f.low_52w, 0)} to ${fmt.num(f.high_52w, 0)}`),
+        tile("Analyst target", f.analyst_target == null ? dash : fmt.num(f.analyst_target), f.analyst_rating ? `consensus: ${String(f.analyst_rating).replace(/_/g, " ")}` : "")),
+      h("p", { class: "muted small" }, "From Yahoo Finance. These do not feed the signal; they are context for your own judgement."));
+  }).catch((e) => fill(box, h("h2", {}, "Company facts"), errorBox(e)));
+  return box;
+}
+
+// ---------------------------------------------------------------- option strategies
+/** Profit or loss at expiry across share prices: one line, a zero line, the current price, hover read-out. */
+function payoffChart(points, spot, breakevens) {
+  const W = 640, H = 240, m = { l: 56, r: 12, t: 12, b: 28 };
+  const xs = points.map((p) => p.price), ys = points.map((p) => p.pnl);
+  const x0 = xs[0], x1 = xs.at(-1), lo = Math.min(...ys, 0), hi = Math.max(...ys, 0), pad = (hi - lo) * 0.08 || 1;
+  const y0 = lo - pad, y1 = hi + pad;
+  const X = (v) => m.l + (v - x0) / (x1 - x0) * (W - m.l - m.r), Y = (v) => H - m.b - (v - y0) / (y1 - y0) * (H - m.t - m.b);
+  const grid = cssVar("--border"), text = cssVar("--text-2"), muted = cssVar("--muted");
+  let svg = "";
+  for (let i = 0; i <= 4; i++) { const v = y0 + (y1 - y0) * i / 4; svg += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="${grid}"/><text x="${m.l - 6}" y="${Y(v) + 4}" text-anchor="end" font-size="11" fill="${text}">${Math.round(v).toLocaleString()}</text>`; }
+  for (let i = 0; i <= 5; i++) { const v = x0 + (x1 - x0) * i / 5; svg += `<text x="${X(v)}" y="${H - 8}" text-anchor="middle" font-size="11" fill="${text}">${v.toFixed(0)}</text>`; }
+  svg += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(0)}" y2="${Y(0)}" stroke="${muted}"/>`;
+  svg += `<line x1="${X(spot)}" x2="${X(spot)}" y1="${m.t}" y2="${H - m.b}" stroke="${muted}" stroke-dasharray="4 4"/><text x="${X(spot) + 5}" y="${m.t + 10}" font-size="11" fill="${text}">Now ${spot.toFixed(2)}</text>`;
+  for (const be of breakevens.filter((b) => b >= x0 && b <= x1)) svg += `<circle cx="${X(be)}" cy="${Y(0)}" r="4" fill="${cssVar("--surface")}" stroke="${text}" stroke-width="2"/><text x="${X(be)}" y="${Y(0) - 8}" text-anchor="middle" font-size="11" fill="${text}">breakeven ${be.toFixed(2)}</text>`;
+  svg += `<polyline fill="none" stroke="${cssVar("--series-1")}" stroke-width="2" points="${points.map((p) => `${X(p.price).toFixed(1)},${Y(p.pnl).toFixed(1)}`).join(" ")}"/><line id="hair" y1="${m.t}" y2="${H - m.b}" stroke="${muted}" visibility="hidden"/>`;
+  const el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  el.setAttribute("viewBox", `0 0 ${W} ${H}`); el.setAttribute("role", "img"); el.setAttribute("aria-label", "Profit or loss at expiry by share price");
+  el.style.width = "100%"; el.innerHTML = svg;
+  const tip = $("#tooltip"), hair = el.querySelector("#hair");
+  el.addEventListener("mousemove", (e) => {
+    const box = el.getBoundingClientRect(), vx = (e.clientX - box.left) / box.width * W;
+    const p = points.reduce((a, b) => Math.abs(X(b.price) - vx) < Math.abs(X(a.price) - vx) ? b : a);
+    hair.setAttribute("x1", X(p.price)); hair.setAttribute("x2", X(p.price)); hair.setAttribute("visibility", "visible");
+    fill(tip, h("strong", {}, `Share price ${fmt.num(p.price)}`), h("div", {}, `${p.pnl >= 0 ? "Profit" : "Loss"} at expiry: ${fmt.snum(p.pnl, 0)}`));
+    tip.hidden = false; tip.style.left = Math.min(e.clientX + 14, innerWidth - 190) + "px"; tip.style.top = e.clientY + 14 + "px";
+  });
+  el.addEventListener("mouseleave", () => { tip.hidden = true; hair.setAttribute("visibility", "hidden"); });
+  return el;
+}
+
+function strategiesCard(symbol) {
+  const box = h("section", { class: "card" }, h("h2", {}, "Option strategies"), loading("Building strategies from the chain…"));
+  api("/options/strategies?symbol=" + encodeURIComponent(symbol)).then((r) => {
+    if (!r.available) { fill(box, h("h2", {}, "Option strategies"), h("p", { class: "notice", style: "margin-top:10px" }, r.reason)); return; }
+    const detail = h("div", { class: "stack", style: "margin-top:12px" });
+    const pick = h("div", { class: "seg" });
+    function show(name) {
+      const s = r.strategies.find((x) => x.name === name);
+      [...pick.children].forEach((b) => b.classList.toggle("active", b.textContent.replace(" ✓", "") === name));
+      fill(detail,
+        h("p", { style: "margin:0" }, s.description),
+        h("div", { class: "tiles" },
+          tile(s.option_cost >= 0 ? "Options cost" : "Premium received", fmt.num(Math.abs(s.option_cost)), s.shares ? `plus ${s.shares} shares (${fmt.num(s.shares * r.spot, 0)})` : "paid up front"),
+          tile("Most you can make", s.max_profit == null ? "Unlimited" : fmt.num(s.max_profit, 0)),
+          tile("Most you can lose", fmt.num(s.max_loss, 0), s.risk.split(".")[0] + "."),
+          tile("Breakeven at expiry", s.breakevens.length ? s.breakevens.map((b) => fmt.num(b)).join(" and ") : dash)),
+        table([{ t: "Leg", l: 1 }, "Strike", "Price per share", "Delta"], [
+          ...(s.shares ? [h("tr", {}, h("td", {}, `Own ${s.shares} shares`), h("td", {}, ""), h("td", { class: "num" }, fmt.num(r.spot)), h("td", { class: "num" }, "1.00"))] : []),
+          ...s.legs.map((l) => h("tr", {}, h("td", {}, `${l.action === "buy" ? "Buy" : "Sell"} 1 ${l.kind}`), h("td", { class: "num" }, fmt.num(l.strike)), h("td", { class: "num" }, fmt.num(l.premium)), h("td", { class: "num" }, fmt.num(l.delta, 2))))]),
+        payoffChart(s.payoff, r.spot, s.breakevens),
+        h("ul", { class: "reasons" }, h("li", {}, s.risk), s.warnings.map((w) => h("li", {}, w))));
+    }
+    r.strategies.forEach((s) => pick.append(h("button", { onclick: () => show(s.name) }, s.name + (s.name === r.suggested ? " ✓" : ""))));
+    fill(box, h("div", { class: "row between" }, h("h2", {}, "Option strategies"), h("span", { class: "muted small" }, `Contracts expiring ${r.expiry} (${r.days_to_expiry} days)`)),
+      h("p", { style: "margin:10px 0" }, r.note, r.suggested ? " The tick marks the simplest fit." : ""), pick, detail,
+      h("p", { class: "muted small" }, "Profit and loss are at expiry, per one contract (100 shares). The paper account can buy single calls and puts with the ticket above; spreads and covered calls are shown for study and for your real broker."));
+    show(r.suggested || r.strategies[0].name);
+  }).catch((e) => fill(box, h("h2", {}, "Option strategies"), errorBox(e)));
+  return box;
+}
+
+// ---------------------------------------------------------------- my portfolio (holdings and brokers)
+async function holdingsView() {
+  const [hold, bk] = await Promise.all([api("/holdings"), api("/brokers")]);
+  const names = bk.brokers.map((b) => b.name);
+  const brokerSelect = (attrs = {}) => h("select", attrs, h("option", { value: "" }, names.length ? "Unassigned" : "No brokers added yet"), names.map((n) => h("option", { value: n }, n)));
+  const err = h("p", { class: "error", role: "alert" }), ok = h("p", { class: "small up", role: "status" });
+  ok.textContent = sessionStorage.getItem("ql_hold") || ""; sessionStorage.removeItem("ql_hold");
+  const done = (msg) => { sessionStorage.setItem("ql_hold", msg); render(); };
+
+  // --- holdings
+  const impBroker = brokerSelect({ "aria-label": "Broker for this file" }), impMarket = h("select", { "aria-label": "Codes are from" }, h("option", { value: "US" }, "Codes are US tickers"), h("option", { value: "ASX" }, "Codes are ASX codes"));
+  const file = h("input", { type: "file", accept: ".csv,text/csv", "aria-label": "CSV file of holdings", onchange: async () => {
+    if (!file.files[0]) return; err.textContent = "";
+    try {
+      const r = await api("/holdings/import", { body: { csv: await file.files[0].text(), market: impMarket.value, broker: impBroker.value } });
+      done(`Imported ${r.imported} holding${r.imported === 1 ? "" : "s"}${r.broker ? " at " + r.broker : ""}.${r.skipped.length ? " Skipped: " + r.skipped.join(" ") : ""}`);
+    } catch (ex) { err.textContent = ex.message; file.value = ""; }
+  } });
+  const addForm = h("form", { class: "fields", onsubmit: async (e) => {
+    e.preventDefault(); err.textContent = "";
+    const d = Object.fromEntries(new FormData(addForm));
+    try { await api("/holdings", { body: { symbol: d.symbol, qty: +d.qty, cost: d.cost ? +d.cost : null, broker: d.broker } }); done(`Saved ${d.symbol.toUpperCase()}.`); } catch (ex) { err.textContent = ex.message; }
+  } },
+    h("label", {}, "Ticker", h("input", { name: "symbol", required: true, placeholder: "AAPL or BHP.AX" })),
+    h("label", {}, "Shares", h("input", { name: "qty", type: "number", min: 0, step: "any", required: true })),
+    h("label", {}, "Average cost (optional)", h("input", { name: "cost", type: "number", min: 0, step: "any" })),
+    h("label", {}, "Held at", brokerSelect({ name: "broker" })), h("button", { type: "submit" }, "Add or update"));
+  const rows = hold.holdings.map((x) => h("tr", {},
+    h("td", {}, h("button", { class: "link", onclick: () => go("research", x.symbol) }, x.symbol), h("div", { class: "muted small" }, x.name)),
+    h("td", { class: "l" }, x.broker || "Unassigned"), h("td", { class: "num" }, fmt.num(x.qty, x.qty % 1 ? 3 : 0)), h("td", { class: "num" }, x.cost == null ? dash : fmt.num(x.cost)),
+    h("td", { class: "num" }, fmt.num(x.price)), h("td", { class: "num" }, fmt.money(x.value, x.currency)), h("td", { class: "num" }, fmt.pct(x.weight)),
+    h("td", {}, x.pnl == null ? dash : signed(x.pnl, `${fmt.snum(x.pnl)} (${fmt.spct(x.pnl_pct)})`)), h("td", { class: "num" }, fmt.num(x.beta)),
+    h("td", { class: "l" }, x.signal ? chip(x.signal) : dash),
+    h("td", {}, h("button", { class: "link", "aria-label": `Remove ${x.symbol}`, onclick: async () => { await api("/holdings", { body: { symbol: x.symbol, qty: 0, broker: x.broker } }); render(); } }, "✕"))));
+  const holdingsCard = h("section", { class: "card" }, h("h2", {}, "What I own"),
+    hold.books.length ? h("div", { class: "tiles", style: "margin-bottom:12px" }, hold.books.map((b) => [
+      tile(`${b.currency} holdings`, fmt.num(b.value), `${b.count} position${b.count === 1 ? "" : "s"}`),
+      tile(`${b.currency} profit`, b.pnl == null ? dash : signed(b.pnl, fmt.snum(b.pnl)), b.pnl == null ? "needs average costs" : "on positions with a cost"),
+      tile(`${b.currency} beta`, fmt.num(b.beta), "1.00 moves with the market")])) : null,
+    hold.warnings.length ? h("ul", { class: "reasons", style: "margin-bottom:12px" }, hold.warnings.map((w) => h("li", {}, w))) : null,
+    table([{ t: "Holding", l: 1 }, { t: "Held at", l: 1 }, "Shares", "Avg cost", "Last", "Value", "Weight", "Profit", "Beta", { t: "Trend", l: 1 }, ""], rows,
+      { empty: "Nothing recorded yet. Import a CSV export from your broker, or add holdings by hand below." }),
+    hold.by_broker.length > 1 ? [h("h3", { style: "margin-top:16px" }, "Split across brokers"),
+      table([{ t: "Broker", l: 1 }, "Positions", "Value", "Share of that currency"], hold.by_broker.map((b) => h("tr", {},
+        h("td", {}, `${b.broker}, ${b.currency} shares`), h("td", { class: "num" }, b.positions), h("td", { class: "num" }, fmt.money(b.value, b.currency)),
+        h("td", {}, h("div", { class: "row", style: "justify-content:flex-end;flex-wrap:nowrap" }, h("div", { class: "meter" }, h("i", { style: `width:${(b.share * 100).toFixed(1)}%` })), h("span", { class: "num" }, fmt.pct(b.share, 0)))))))] : null,
+    h("h3", { style: "margin-top:16px" }, "Import from a broker file"),
+    h("div", { class: "row", style: "margin-top:8px" }, impBroker, impMarket, file),
+    h("p", { class: "muted small" }, "A CSV with a header row containing a ticker column (Symbol, Ticker or Code) and a quantity column (Quantity, Shares or Units); an average cost column is used if present. Importing replaces what is recorded for that broker only. The file is read on this computer and never sent anywhere else."),
+    h("h3", { style: "margin-top:12px" }, "Add or change one holding"), addForm, err, ok,
+    h("p", { class: "muted small" }, "Holdings are for your information: the app never trades them. They feed the portfolio builder, the daily earnings alerts and the assistant. \"Trend\" uses price trend and momentum only."));
+
+  // --- brokers
+  const editBox = h("div", {});
+  function editBroker(b) {
+    const berr = h("p", { class: "error", role: "alert" });
+    const input = (f) => f.kind === "bool" ? h("label", { class: "row small", style: "align-self:center" }, h("input", { type: "checkbox", name: f.key, checked: b ? b[f.key] : f.key !== "us_options" && f.key !== "fractional" }), f.label)
+      : f.kind === "str" ? h("label", {}, f.label, h("select", { name: f.key }, ["AUD", "USD"].map((c) => h("option", { value: c, selected: (b ? b[f.key] : "AUD") === c }, c))))
+      : h("label", {}, f.label, h("input", { name: f.key, type: "number", min: 0, step: "any", value: b ? b[f.key] : 0 }));
+    const form = h("form", { class: "fields", style: "margin-top:12px", onsubmit: async (e) => {
+      e.preventDefault(); berr.textContent = "";
+      const d = Object.fromEntries(new FormData(form)), data = {};
+      for (const f of bk.fields) data[f.key] = f.kind === "bool" ? form.elements[f.key].checked : f.kind === "float" ? +d[f.key] || 0 : d[f.key];
+      try { await api("/brokers", { body: { name: d.name, data } }); done(`Saved ${d.name}.`); } catch (ex) { berr.textContent = ex.message; }
+    } },
+      h("label", {}, "Broker name", h("input", { name: "name", required: true, maxlength: 40, value: b ? b.name : "", readonly: !!b })),
+      bk.fields.map(input), h("button", { type: "submit", class: "primary" }, "Save broker"));
+    fill(editBox, form, berr, h("p", { class: "muted small" }, "Copy the fees from the broker's current price list. A share trade is costed as the larger of the minimum and (fixed fee + percentage of the trade), plus the conversion percentage when the stock is priced in a different currency from the account. Leave a fee at 0 if it does not apply."));
+  }
+  const feeText = (b, m) => { const f = b[m + "_fixed"], p = b[m + "_pct"], mn = b[m + "_min"]; return [f ? fmt.num(f) : null, p ? p + "%" : null].filter(Boolean).join(" + ") + (mn ? ` (min ${fmt.num(mn)})` : "") || "free"; };
+  const brokersCard = h("section", { class: "card" }, h("div", { class: "row between" }, h("h2", {}, "My brokers"), h("button", { onclick: () => editBroker(null) }, "Add a broker")),
+    table([{ t: "Broker", l: 1 }, { t: "Account", l: 1 }, "US shares", "ASX shares", "US options", "Currency conversion", { t: "Stop orders", l: 1 }, ""], bk.brokers.map((b) => h("tr", {},
+      h("td", {}, h("strong", {}, b.name)), h("td", { class: "l" }, b.base_currency),
+      h("td", { class: "num" }, b.us_stocks ? feeText(b, "us") : "not offered"), h("td", { class: "num" }, b.asx_stocks ? feeText(b, "asx") : "not offered"),
+      h("td", { class: "num" }, b.us_options ? `${fmt.num(b.option_per_contract)} / contract` : "not offered"), h("td", { class: "num" }, b.fx_pct ? b.fx_pct + "%" : "none"),
+      h("td", { class: "l" }, b.conditional_orders ? "Yes" : "No"),
+      h("td", {}, h("button", { onclick: () => editBroker(b) }, "Edit"), " ", h("button", { class: "link", "aria-label": `Delete ${b.name}`, onclick: async () => { if (confirm(`Delete ${b.name}? Holdings recorded there are kept.`)) { await api("/brokers?name=" + encodeURIComponent(b.name), { method: "DELETE" }); render(); } } }, "✕")))),
+      { empty: "No brokers yet. Add each trading provider you use with its fees, and the app will work out the cheapest one for each trade." }),
+    editBox);
+
+  // --- which broker for this trade
+  const recBox = h("div", { style: "margin-top:12px" });
+  const recForm = h("form", { class: "fields", onsubmit: async (e) => {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(recForm)), opt = d.what.endsWith("option");
+    fill(recBox, loading());
+    try {
+      const r = await api(`/brokers/recommend?symbol=${encodeURIComponent(d.symbol)}&action=${d.what.startsWith("sell") ? "sell" : "buy"}&value=${+d.value || 0}&instrument=${opt ? "option" : "stock"}&contracts=${+d.contracts || 1}`);
+      if (!r.available) { fill(recBox, h("p", { class: "notice" }, r.reason)); return; }
+      fill(recBox, h("p", {}, h("strong", {}, `Use ${r.recommended}. `), r.why),
+        table([{ t: "Broker", l: 1 }, "Commission", "Conversion", "Total cost", "% of trade", "Buy and sell again", { t: "Notes", l: 1 }], r.options.map((o) => h("tr", {},
+          h("td", {}, o.broker === r.recommended ? h("strong", {}, o.broker + " ✓") : o.broker), h("td", { class: "num" }, fmt.num(o.commission)), h("td", { class: "num" }, fmt.num(o.fx)),
+          h("td", { class: "num" }, fmt.money(o.total, o.currency)), h("td", { class: "num" }, o.pct_of_trade == null ? dash : fmt.pct(o.pct_of_trade, 2)), h("td", { class: "num" }, fmt.num(o.round_trip)),
+          h("td", { class: "l wrap" }, o.notes.join(" "))))),
+        r.excluded.length ? h("p", { class: "muted small" }, "Left out: " + r.excluded.join(" ")) : null);
+    } catch (ex) { fill(recBox, errorBox(ex)); }
+  } },
+    h("label", {}, "Ticker", h("input", { name: "symbol", required: true, value: state.symbol })),
+    h("label", {}, "What you want to do", h("select", { name: "what" }, h("option", { value: "buy" }, "Buy shares"), h("option", { value: "sell" }, "Sell shares"), h("option", { value: "buy option" }, "Buy options"), h("option", { value: "sell option" }, "Sell options"))),
+    h("label", {}, "Trade size (money)", h("input", { name: "value", type: "number", min: 0, step: "any", value: 2000, required: true })),
+    h("label", {}, "Option contracts", h("input", { name: "contracts", type: "number", min: 1, step: 1, value: 1 })),
+    h("button", { type: "submit", class: "primary" }, "Find the best broker"));
+  const recCard = h("section", { class: "card" }, h("h2", {}, "Which broker for this trade?"),
+    h("p", { class: "muted small", style: "margin-top:-6px" }, "Compares your brokers on the fees you entered. Shares can only be sold where they are held, so a sale looks only at brokers holding the stock. The same recommendation appears in each stock's How to buy panel and in the portfolio builder."),
+    recForm, recBox);
+  return [holdingsCard, brokersCard, recCard];
 }
 
 // ---------------------------------------------------------------- buy guide
@@ -180,6 +401,7 @@ function buyGuide(symbol, open = false) {
       const s = g.session, m = g.minimum_equity, o = g.option, cur = g.currency;
       fill(body,
         g.signal_warning ? h("p", { class: "notice" }, g.signal_warning) : null,
+        g.earnings_warning ? h("p", { class: "notice" }, g.earnings_warning) : null,
         h("div", { class: "row" }, h("span", { class: "small muted" }, "Planning to buy at"), whenIn, nowBtn,
           h("span", { class: "small" }, `${s.market}: ${s.phase} (${s.exchange_time} exchange time)`,
             s.next_open ? `, next opens ${new Date(s.next_open).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })} your time` : "")),
@@ -194,6 +416,7 @@ function buyGuide(symbol, open = false) {
           table([{ t: "Order type", l: 1 }, "Price", { t: "What it does", l: 1 }, { t: "Use it when", l: 1 }], g.orders.map((x) => h("tr", {},
             h("td", {}, x.recommended ? h("strong", {}, x.type + " ✓") : x.type), h("td", { class: "num" }, x.price == null ? "market" : fmt.num(x.price)),
             h("td", { class: "l wrap" }, x.what), h("td", { class: "l wrap" }, x.use_when)))),
+          g.broker.available ? h("p", { style: "margin:8px 0 0" }, h("strong", {}, `Buy through ${g.broker.recommended}. `), g.broker.why) : null,
           h("p", { class: "muted small" }, `After you are in: stop-loss at ${fmt.num(g.after_entry.stop_loss)}, take profit at ${fmt.num(g.after_entry.take_profit)}. ${g.after_entry.note}`)),
         h("div", {}, h("h3", {}, "Option alternative"),
           o.available ? [
@@ -206,6 +429,7 @@ function buyGuide(symbol, open = false) {
               tile("If stock hits stop", o.loss_at_stop == null ? dash : signed(o.loss_at_stop, fmt.snum(o.loss_at_stop, 0)), "at expiry"),
               tile("Time decay", fmt.num(o.theta_per_day, 0) + " / day", `implied vol ${fmt.pct(o.iv, 0)}`)),
             o.warnings.length ? h("ul", { class: "reasons", style: "margin-top:8px" }, o.warnings.map((x) => h("li", {}, x))) : null,
+            g.option_broker && g.option_broker.available ? h("p", { style: "margin:8px 0 0" }, h("strong", {}, `Buy through ${g.option_broker.recommended}. `), g.option_broker.why) : null,
             h("div", { class: "row", style: "margin-top:10px" }, h("button", { onclick: () => go("options", symbol) }, "Open the option chain to paper trade it")),
           ] : h("p", { class: "notice", style: "margin-top:8px" }, o.reason)),
         h("p", { class: "muted small" }, g.caveats.join(" ")));
@@ -219,14 +443,14 @@ function buyGuide(symbol, open = false) {
 
 // ---------------------------------------------------------------- portfolio
 async function portfolioView() {
-  const out = h("div", { class: "stack" }), err = h("p", { class: "error", role: "alert" });
+  const out = h("div", { class: "stack" }), err = h("p", { class: "error", role: "alert" }), savedBox = h("div", { class: "stack" });
   const saved = JSON.parse(localStorage.getItem("ql_portfolio") || "null") || { equity: 10000, months: 6, target: 5, market: "US" };
   const btn = h("button", { type: "submit", class: "primary" }, "Build portfolio");
+  const body = () => { const d = Object.fromEntries(new FormData(form)); return { equity: +d.equity, months: +d.months, target_return: d.target / 100, market: d.market }; };
   const form = h("form", { class: "fields", onsubmit: async (e) => {
     e.preventDefault(); err.textContent = ""; btn.disabled = true;
-    const d = Object.fromEntries(new FormData(form));
-    localStorage.setItem("ql_portfolio", JSON.stringify(d));
-    try { show(await api("/portfolio", { body: { equity: +d.equity, months: +d.months, target_return: d.target / 100, market: d.market } })); }
+    localStorage.setItem("ql_portfolio", JSON.stringify(Object.fromEntries(new FormData(form))));
+    try { show(await api("/portfolio", { body: body() })); }
     catch (ex) { err.textContent = ex.message; } finally { btn.disabled = false; }
   } },
     h("label", {}, "Amount to invest", h("input", { name: "equity", type: "number", min: 1, step: "any", value: saved.equity, required: true })),
@@ -234,13 +458,17 @@ async function portfolioView() {
     h("label", {}, "Period (months)", h("input", { name: "months", type: "number", min: 1, max: 60, step: 1, value: saved.months, required: true })),
     h("label", {}, "Target return over the period (%)", h("input", { name: "target", type: "number", min: 0, max: 500, step: "any", value: saved.target, required: true })), btn);
   function show(p) {
-    const cur = p.inputs.currency, a = p.assumptions;
+    const cur = p.inputs.currency, a = p.assumptions, owned = p.positions.some((x) => x.held), brokered = p.positions.some((x) => x.broker);
     const rows = p.positions.map((x) => h("tr", { class: "click", onclick: () => go("research", x.symbol) },
       h("td", {}, h("strong", {}, x.symbol), h("div", { class: "muted small" }, x.name)), h("td", { class: "l" }, x.role),
-      h("td", { class: "num" }, fmt.int(x.shares)), h("td", { class: "num" }, fmt.num(x.price)), h("td", { class: "num" }, fmt.money(x.value, cur)),
-      h("td", { class: "num" }, fmt.pct(x.weight)), h("td", { class: "num" }, fmt.num(x.beta)), h("td", { class: "num" }, x.stop == null ? dash : fmt.num(x.stop))));
-    rows.push(h("tr", {}, h("td", {}, h("strong", {}, "Cash")), h("td", { class: "l" }, "Uninvested"), h("td", {}, ""), h("td", {}, ""),
-      h("td", { class: "num" }, fmt.money(p.cash, cur)), h("td", { class: "num" }, fmt.pct(p.cash_weight)), h("td", { class: "num" }, "0.00"), h("td", {}, "")));
+      h("td", { class: "num" }, fmt.int(x.shares)), owned ? h("td", { class: "num" }, fmt.int(x.to_buy)) : null,
+      h("td", { class: "num" }, fmt.num(x.price)), h("td", { class: "num" }, fmt.money(x.value, cur)),
+      h("td", { class: "num" }, fmt.pct(x.weight)), h("td", { class: "num" }, fmt.num(x.beta)), h("td", { class: "num" }, x.stop == null ? dash : fmt.num(x.stop)),
+      brokered ? h("td", { class: "l" }, x.broker ? `${x.broker} (${fmt.num(x.fee)})` : dash) : null));
+    rows.push(h("tr", {}, h("td", {}, h("strong", {}, "Cash")), h("td", { class: "l" }, "Uninvested"), h("td", {}, ""), owned ? h("td", {}, "") : null, h("td", {}, ""),
+      h("td", { class: "num" }, fmt.money(p.cash, cur)), h("td", { class: "num" }, fmt.pct(p.cash_weight)), h("td", { class: "num" }, "0.00"), h("td", {}, ""), brokered ? h("td", {}, "") : null));
+    const nameIn = h("input", { placeholder: "Name, e.g. Six-month plan", "aria-label": "Portfolio name", maxlength: 60 });
+    const saveErr = h("span", { class: "error" });
     fill(out,
       h("section", { class: "card" }, h("h2", {}, "Is the target realistic?"),
         h("p", { style: "margin:0 0 12px" }, p.verdict),
@@ -252,29 +480,74 @@ async function portfolioView() {
           tile("Worst drop, last 2 years", fmt.pct(p.worst_drop_last_2y), "this mix, peak to trough"),
           tile("Loss if every stop is hit", fmt.money(p.loss_if_all_stops_hit, cur), "ideas only; the fund has no stop"))),
       h("section", { class: "card" }, h("div", { class: "row between" }, h("h2", {}, "Recommended portfolio"),
-          h("span", { class: "muted small" }, `${fmt.pct(p.invest_share, 0)} invested · beta ${fmt.num(p.beta)} · volatility ${fmt.pct(p.annual_volatility, 0)} a year`)),
-        table([{ t: "Holding", l: 1 }, { t: "Role", l: 1 }, "Shares", "Price", "Value", "Weight", "Beta", "Stop"], rows),
-        p.notes.length ? h("ul", { class: "reasons", style: "margin-top:10px" }, p.notes.map((x) => h("li", {}, x))) : null),
+          h("span", { class: "muted small" }, `${fmt.pct(p.invest_share, 0)} invested · beta ${fmt.num(p.beta)} · volatility ${fmt.pct(p.annual_volatility, 0)} a year`,
+            p.total_fees != null ? ` · about ${fmt.money(p.total_fees, cur)} in fees to buy` : "")),
+        table([{ t: "Holding", l: 1 }, { t: "Role", l: 1 }, "Shares", owned ? "To buy" : null, "Price", "Value", "Weight", "Beta", "Stop", brokered ? { t: "Buy through (fee)", l: 1 } : null].filter(Boolean), rows),
+        p.notes.length ? h("ul", { class: "reasons", style: "margin-top:10px" }, p.notes.map((x) => h("li", {}, x))) : null,
+        p.positions.length ? h("div", { class: "row", style: "margin-top:12px" }, nameIn, h("button", { onclick: async () => {
+          saveErr.textContent = "";
+          try { await api("/portfolios", { body: { ...body(), name: nameIn.value } }); nameIn.value = ""; loadSaved(); } catch (ex) { saveErr.textContent = ex.message; }
+        } }, "Save and track this portfolio"), saveErr) : null),
       h("section", { class: "card" }, h("h2", {}, "How this was worked out"),
         h("ul", { class: "reasons" },
           h("li", {}, `Structure: about 40% of the invested money in a broad index fund, the rest spread over up to 6 current ideas from the latest scan${a.scan_date ? ` (${new Date(a.scan_date).toLocaleDateString([], { dateStyle: "medium" })})` : ""}, with calmer stocks given more. Whole shares only.`),
           h("li", {}, "How much is invested versus held in cash is set by your target: a higher target means more in shares, up to 100%. The app never borrows to reach a target."),
           h("li", {}, `Expected return assumes cash earns ${fmt.pct(a.cash_rate, 0)} a year and the share market ${fmt.pct(a.equity_premium, 0)} a year more than cash, scaled by each holding's beta. It does not assume the ideas keep rising at their recent pace.`),
           h("li", {}, "The range and the chance of reaching the target come from how much this mix moved day to day over the last two years. Real markets produce bigger shocks than that method expects, so treat the low end as optimistic."),
-          h("li", {}, "This is a starting allocation, not financial advice. It ignores tax, brokerage, currency conversion and anything else you already own."))));
+          h("li", {}, "This is a starting allocation, not financial advice. It ignores tax and anything you own that has not been imported under My portfolio."))));
   }
-  onMount(() => form.requestSubmit());
+  async function loadSaved() {
+    const list = await api("/portfolios");
+    fill(savedBox, list.length ? h("section", { class: "card" }, h("h2", {}, "Saved portfolios"),
+      table([{ t: "Name", l: 1 }, "Saved", "Amount", "Target", ""], list.map((x) => h("tr", {},
+        h("td", {}, h("button", { class: "link", onclick: () => track(x.id) }, x.name)), h("td", {}, new Date(x.created).toLocaleDateString([], { dateStyle: "medium" })),
+        h("td", { class: "num" }, fmt.money(x.inputs.equity, x.inputs.currency)), h("td", { class: "num" }, `${fmt.spct(x.inputs.target_return)} in ${x.inputs.months} mo`),
+        h("td", {}, h("button", { onclick: () => track(x.id) }, "Track"), " ", h("button", { class: "link", "aria-label": `Delete ${x.name}`, onclick: async () => { if (confirm(`Delete the saved portfolio "${x.name}"?`)) { await api("/portfolios/" + x.id, { method: "DELETE" }); fill(trackBox); loadSaved(); } } }, "✕"))))),
+      trackBox) : null);
+  }
+  const trackBox = h("div", { class: "stack", style: "margin-top:12px" });
+  async function track(id) {
+    fill(trackBox, loading("Valuing the portfolio…"));
+    try {
+      const t = await api("/portfolios/" + id), cur = t.inputs.currency, legend = h("div", { class: "legend" }), el = h("div", { class: "chart short" });
+      fill(trackBox,
+        h("h3", {}, `${t.name}: day ${t.days_elapsed} of ${t.days_total}`),
+        h("div", { class: "tiles" },
+          tile("Value now", fmt.money(t.value, cur), signed(t.return, fmt.spct(t.return, 2))),
+          tile("Where the target needs you", fmt.spct(t.on_track_return, 2), `target ${fmt.spct(t.target_return)} by the end`),
+          tile("Against the target path", signed(t.ahead_of_target_path, fmt.spct(t.ahead_of_target_path, 2)), t.ahead_of_target_path >= 0 ? "ahead" : "behind"),
+          tile(`Index (${t.index})`, t.index_return == null ? dash : signed(t.index_return, fmt.spct(t.index_return, 2)), "same period")),
+        t.history.length > 2 ? [legend, el] : h("p", { class: "muted small" }, "The value chart appears once a few trading days have passed."),
+        h("h3", {}, "What to do"), h("ul", { class: "reasons" }, t.suggestions.map((x) => h("li", {}, x))),
+        table([{ t: "Holding", l: 1 }, "Shares", "Bought at", "Now", "Return", "Weight then", "Weight now", { t: "Signal", l: 1 }], t.positions.map((x) => h("tr", {},
+          h("td", {}, h("strong", {}, x.symbol)), h("td", { class: "num" }, fmt.int(x.shares)), h("td", { class: "num" }, fmt.num(x.price)), h("td", { class: "num" }, fmt.num(x.price_now)),
+          h("td", {}, signed(x.return, fmt.spct(x.return))), h("td", { class: "num" }, fmt.pct(x.weight)), h("td", { class: "num" }, fmt.pct(x.weight_now)),
+          h("td", { class: "l" }, x.stop_hit ? "Stop hit" : x.signal || dash)))));
+      if (t.history.length > 2) {
+        const chart = makeChart(el), c1 = cssVar("--series-1"), c2 = cssVar("--series-2");
+        const s1 = chart.addLineSeries(lineOpts(c1)), s2 = chart.addLineSeries(lineOpts(c2));
+        s2.setData(t.index_history); s1.setData(t.history); chart.timeScale().fitContent();
+        liveLegend(chart, legend, [{ series: s1, label: "Portfolio", color: c1, last: t.history.at(-1) }, { series: s2, label: "Same money in the index", color: c2, last: t.index_history.at(-1) }]);
+      }
+    } catch (e) { fill(trackBox, errorBox(e)); }
+  }
+  onMount(() => { form.requestSubmit(); loadSaved(); });
   return [h("section", { class: "card" }, h("h2", {}, "Portfolio builder"),
     h("p", { class: "muted small", style: "margin-top:-6px" }, "Enter how much you have, for how long, and the return you are aiming for. The example below uses 10,000 over 6 months aiming for 5%; change the numbers and rebuild."),
-    form, err), out];
+    form, err), savedBox, out];
 }
 
 // ---------------------------------------------------------------- ideas
 async function ideasView() {
   let st = await api("/ideas");
-  const box = h("div", { class: "stack" });
+  const sectorList = await api("/ideas/sectors");
+  const box = h("div", { class: "stack" }), btBox = h("div", {});
   const market = h("select", { "aria-label": "Market" }, h("option", { value: "ALL" }, "US and ASX"), h("option", { value: "US" }, "US only"), h("option", { value: "ASX" }, "ASX only"));
-  const btn = h("button", { class: "primary", onclick: async () => { await api("/ideas/scan?market_name=" + market.value, { method: "POST" }); poll(); } }, "Scan now");
+  const sector = h("select", { "aria-label": "Sector" }, h("option", { value: "" }, "All sectors"), sectorList.filter((x) => x !== "Funds").map((x) => h("option", { value: x }, x)));
+  const mid = h("input", { type: "checkbox" }), etf = h("input", { type: "checkbox" });
+  const btn = h("button", { class: "primary", onclick: async () => {
+    await api(`/ideas/scan?market_name=${market.value}&mid=${mid.checked}&etf=${etf.checked}${sector.value ? "&sector=" + encodeURIComponent(sector.value) : ""}`, { method: "POST" }); poll();
+  } }, "Scan now");
   const progress = h("span", { class: "muted small", role: "status" });
   const token = render.token;
   async function poll() {
@@ -283,43 +556,74 @@ async function ideasView() {
     draw();
     if (st.status === "running") setTimeout(poll, 1500);
   }
-  function draw() {
-    const running = st.status === "running", r = st.result;
-    btn.disabled = running; btn.textContent = running ? "Scanning…" : r ? "Scan again" : "Scan now";
-    progress.textContent = running ? `${st.stage}${st.total ? ` (${st.done} of ${st.total})` : ""}. This takes about a minute.` : "";
-    if (!r) { fill(box, st.error ? errorBox(new Error(st.error)) : h("p", { class: "notice" }, "No scan yet. Press Scan now to search about 170 of the largest US and ASX companies for buy candidates.")); return; }
-    const age = (Date.now() - new Date(r.scanned_at)) / 36e5;
-    const ideaCards = r.ideas.map((it, i) => h("section", { class: "card" },
+  function card(it, i, bearish) {
+    return h("section", { class: "card" },
       h("div", { class: "row between" },
-        h("div", { class: "row" }, h("span", { class: "muted" }, `#${i + 1}`), h("h2", {}, it.symbol), h("span", { class: "muted" }, it.name), chip(it.label)),
-        h("div", { class: "row" }, h("button", { onclick: () => go("research", it.symbol) }, "Research"), h("button", { class: "primary", onclick: () => go("paper", it.symbol) }, "Paper trade"))),
+        h("div", { class: "row" }, h("span", { class: "muted" }, `#${i + 1}`), h("h2", {}, it.symbol), h("span", { class: "muted" }, it.name), chip(it.label), h("span", { class: "muted small" }, it.sector)),
+        h("div", { class: "row" }, h("button", { onclick: () => go("research", it.symbol) }, "Research"),
+          bearish ? h("button", { class: "primary", onclick: () => go("options", it.symbol) }, "Put strategies") : h("button", { class: "primary", onclick: () => go("paper", it.symbol) }, "Paper trade"))),
       h("div", { class: "tiles", style: "margin:12px 0" },
         tile("Price", fmt.money(it.price, it.currency)),
         tile("Score", fmt.snum(it.score), "scale −1 to +1"),
         tile("Last 20 days", signed(it.ret_20, fmt.spct(it.ret_20))),
         tile("Last 6 months", signed(it.ret_120, fmt.spct(it.ret_120))),
-        tile("Stop / target", `${fmt.num(it.plan.stop)} / ${fmt.num(it.plan.target)}`, "2 and 3 × ATR"),
-        tile("Suggested size", fmt.int(it.plan.shares) + " sh", `risks ${fmt.int(it.plan.risk_amount)} ${it.currency}`)),
+        tile("Price / earnings", it.pe == null ? dash : fmt.num(it.pe, 1), it.next_earnings ? `earnings ${it.next_earnings}` : "no earnings date"),
+        bearish ? tile("How to act", "Buy a put", "shares cannot be shorted here") : tile("Stop / target", `${fmt.num(it.plan.stop)} / ${fmt.num(it.plan.target)}`, `size ${fmt.int(it.plan.shares)} sh`)),
       h("ul", { class: "reasons" }, it.reasons.map((x) => h("li", {}, x))),
-      buyGuide(it.symbol)));
+      bearish ? null : buyGuide(it.symbol));
+  }
+  function draw() {
+    const running = st.status === "running", r = st.result;
+    btn.disabled = running; btn.textContent = running ? "Scanning…" : r ? "Scan again" : "Scan now";
+    progress.textContent = running ? `${st.stage}${st.total ? ` (${st.done} of ${st.total})` : ""}. This takes a minute or two.` : "";
+    if (!r) { fill(box, st.error ? errorBox(new Error(st.error)) : h("p", { class: "notice" }, "No scan yet. Press Scan now to search the largest US and ASX companies for candidates.")); return; }
+    const age = (Date.now() - new Date(r.scanned_at)) / 36e5;
     fill(box,
       st.error ? errorBox(new Error(st.error)) : null,
-      h("p", { class: "muted small" }, `Scanned ${new Date(r.scanned_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}: ${r.screened} of ${r.universe_size} stocks screened`,
-        r.missing ? ` (${r.missing} had no usable data)` : "", `, ${r.shortlisted} got the full signal, ${r.ideas.length} rated Buy or better.`,
+      h("p", { class: "muted small" }, `Scanned ${new Date(r.scanned_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}: ${r.screened} of ${r.universe_size} names screened`,
+        r.sector ? ` in ${r.sector}` : "", r.missing ? ` (${r.missing} had no usable data)` : "", `, ${r.shortlisted} got the full signal, ${r.ideas.length} rated Buy or better.`,
         age > 24 ? " This scan is more than a day old; scan again for current prices." : ""),
-      r.ideas.length ? ideaCards : h("p", { class: "notice" }, "Nothing in this scan rates a Buy. That is a result in itself: when few large stocks are in an uptrend, the app does not force ideas."),
+      r.ideas.length ? r.ideas.map((it, i) => card(it, i, false)) : h("p", { class: "notice" }, "Nothing in this scan rates a Buy. That is a result in itself: when few stocks are in an uptrend, the app does not force ideas."),
+      r.bearish.length ? [h("h2", { style: "margin-top:8px" }, "Bearish ideas"),
+        h("p", { class: "muted small", style: "margin-top:-10px" }, "US stocks in the weakest downtrends that the full signal rates Sell. The way to act on these is a put option, which profits if the price falls and cannot lose more than it cost."),
+        r.bearish.map((it, i) => card(it, i, true))] : null,
       h("section", { class: "card" }, h("h2", {}, "Everything screened"),
         h("p", { class: "muted small", style: "margin-top:-6px" }, "Ranked on price trend and momentum only. The top few per market are then checked with the full signal above. Click a row to research it."),
-        table([{ t: "Symbol", l: 1 }, "Market", "Last", "Quick score", "", "RSI", "20 days", "6 months"], r.table.map((x) => h("tr", { class: "click", onclick: () => go("research", x.symbol) },
-          h("td", {}, h("strong", {}, x.symbol)), h("td", {}, x.market), h("td", { class: "num" }, fmt.money(x.price, x.currency)),
+        table([{ t: "Symbol", l: 1 }, { t: "Sector", l: 1 }, "Last", "Quick score", "", "RSI", "20 days", "6 months"], r.table.map((x) => h("tr", { class: "click", onclick: () => go("research", x.symbol) },
+          h("td", {}, h("strong", {}, x.symbol)), h("td", { class: "l" }, x.sector || dash), h("td", { class: "num" }, fmt.money(x.price, x.currency)),
           h("td", { class: "num" }, fmt.snum(x.score)), h("td", {}, scoreBar(x.score)), h("td", { class: "num" }, fmt.num(x.rsi, 0)),
           h("td", {}, signed(x.ret_20, fmt.spct(x.ret_20))), h("td", {}, signed(x.ret_120, fmt.spct(x.ret_120))))), { scroll: true })));
+  }
+  async function runBacktest(m) {
+    fill(btBox, loading("Replaying four years of weekly scans… about half a minute."));
+    try {
+      const r = await api("/ideas/backtest?market_name=" + m), s = r.stats, legend = h("div", { class: "legend" }), el = h("div", { class: "chart short" });
+      const row = (name, key, f) => h("tr", {}, h("td", {}, name), h("td", { class: "num" }, h("strong", {}, f(s.strategy[key]))), h("td", { class: "num" }, f(s.universe[key])), h("td", { class: "num" }, s.index ? f(s.index[key]) : dash));
+      const beat = r.beat_universe;
+      fill(btBox,
+        h("p", { style: "margin:10px 0" }, h("strong", {}, beat > 0.01 ? `The screen beat its universe by ${fmt.pct(beat)} a year.` : beat < -0.01 ? `The screen trailed its universe by ${fmt.pct(-beat)} a year.` : "The screen did about the same as its universe."),
+          ` Buying the top ${r.top_n} ${m} large companies by score every ${r.hold_days} trading days, ${r.from} to ${r.to}, after ${r.cost_bps} bps trading costs.`),
+        legend, el,
+        table(["", "Scanner picks", "All stocks, equal", "Index"], [row("Return per year", "cagr", fmt.spct), row("Volatility", "volatility", fmt.pct), row("Sharpe ratio", "sharpe", fmt.num), row("Worst drop", "max_drawdown", fmt.pct)]),
+        h("ul", { class: "reasons", style: "margin-top:10px" },
+          h("li", {}, "The fair comparison is against \"All stocks, equal\", not the index: the list is today's biggest companies, which were picked with hindsight and flatter every line here."),
+          h("li", {}, "Only the price screen is replayed. The forecast and news parts of the full signal cannot be reconstructed for the past, so the live ideas may differ."),
+          h("li", {}, `It held ${fmt.num(r.avg_holdings, 1)} stocks on average and replaced ${fmt.pct(r.avg_turnover_per_review / 2, 0)} of the portfolio at each review. Past results do not predict future returns.`)));
+      const chart = makeChart(el), defs = [["Scanner picks", "strategy", "--series-1"], ["All stocks, equal", "universe", "--series-2"], ["Index", "index", "--series-3"]].filter((d) => r.curves[d[1]]);
+      liveLegend(chart, legend, defs.map(([label, key, v]) => { const sr = chart.addLineSeries(lineOpts(cssVar(v))); sr.setData(r.curves[key]); return { series: sr, label, color: cssVar(v), last: r.curves[key].at(-1) }; }));
+      chart.timeScale().fitContent();
+    } catch (e) { fill(btBox, errorBox(e)); }
   }
   draw();
   if (st.status === "running") onMount(poll);
   return [h("section", { class: "card" },
-    h("div", { class: "row between" }, h("h2", {}, "Trade ideas"), h("div", { class: "row" }, progress, market, btn)),
-    h("p", { class: "muted small" }, "Scans the largest US and ASX companies and shortlists the ones in the strongest uptrends that the full signal also rates a Buy. Ideas are a starting point for your own check, chosen mostly on trend and momentum; they are not predictions or financial advice.")), box];
+    h("div", { class: "row between" }, h("h2", {}, "Trade ideas"), h("div", { class: "row" }, progress, market, sector,
+      h("label", { class: "row small" }, mid, "Mid-sized"), h("label", { class: "row small" }, etf, "Funds"), btn)),
+    h("p", { class: "muted small" }, "Scans large US and ASX companies (optionally mid-sized companies and index funds, or one sector) and shortlists the ones in the strongest uptrends that the full signal also rates a Buy. Ideas are a starting point for your own check, chosen mostly on trend and momentum; they are not predictions or financial advice.")),
+    box,
+    h("section", { class: "card" }, h("div", { class: "row between" }, h("h2", {}, "Has this scanner worked in the past?"),
+      h("div", { class: "row" }, h("button", { onclick: () => runBacktest("US") }, "Test on US"), h("button", { onclick: () => runBacktest("ASX") }, "Test on ASX"))),
+      h("p", { class: "muted small" }, "Replays the price screen week by week over about four years, using only what was known at the time, and compares its picks with simply holding every stock in the list."), btBox)];
 }
 
 // ---------------------------------------------------------------- research
@@ -405,11 +709,11 @@ async function researchView() {
         const safe = /^https?:\/\//.test(it.link);
         return h("li", {}, h("span", { class: "dot " + cls, title: word }),
           h("div", {}, safe ? h("a", { href: it.link, target: "_blank", rel: "noopener noreferrer" }, it.title) : it.title,
-            h("div", { class: "muted small" }, `${it.source} · ${new Date(it.published).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })} · ${word} (${fmt.snum(it.sentiment)})`)));
+            h("div", { class: "muted small" }, `${it.source} · ${new Date(it.published).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })} · ${word} (${fmt.snum(it.sentiment)}${it.ai ? ", read by Claude" : ""})`)));
       })) : h("p", { class: "muted" }, "No recent headlines found."));
   }).catch((e) => fill(newsCard, h("h2", {}, "News"), errorBox(e)));
 
-  return [chartCard, h("div", { class: "grid-even" }, signalCard, newsCard),
+  return [chartCard, fundamentalsCard(sym), h("div", { class: "grid-even" }, signalCard, newsCard),
     h("section", { class: "card" }, h("h2", {}, `Buying ${sym}`), buyGuide(sym, true))];
 }
 
@@ -560,7 +864,7 @@ async function optionsView() {
     } catch (e) { fill(body, errorBox(e)); }
   }
   load(select.value);
-  return [h("section", { class: "card" }, head, h("div", { class: "row", style: "margin-top:12px" }, h("label", { class: "row" }, "Expiry", select))), body, calc];
+  return [h("section", { class: "card" }, head, h("div", { class: "row", style: "margin-top:12px" }, h("label", { class: "row" }, "Expiry", select))), body, strategiesCard(sym), calc];
 }
 
 // ---------------------------------------------------------------- backtest
@@ -626,21 +930,32 @@ async function backtestView() {
 
 // ---------------------------------------------------------------- paper trading
 async function paperView() {
-  const [acct, trades, perf] = await Promise.all([api("/paper/account"), api("/paper/trades"), api("/signals/performance")]);
+  const [acct, trades, perf, orders] = await Promise.all([api("/paper/account"), api("/paper/trades"), api("/signals/performance"), api("/paper/orders")]);
   const err = h("p", { class: "error", role: "alert" }), ok = h("p", { class: "small up", role: "status" });
-  async function order(symbol, side, qty) {
+  async function order(symbol, side, qty, extra = {}) {
     err.textContent = ""; ok.textContent = "";
     try {
-      const r = await api("/paper/orders", { body: { symbol, side, qty: +qty } });
-      sessionStorage.setItem("ql_fill", `Filled: ${r.side} ${r.qty} ${r.symbol} at ${fmt.money(r.price, r.currency)}`);
+      const r = await api("/paper/orders", { body: { symbol, side, qty: +qty, ...extra } });
+      sessionStorage.setItem("ql_fill", r.status === "open" ? `Order placed: ${r.side} ${r.qty} ${r.symbol}, ${r.type} at ${fmt.money(r.price, r.currency)}. It fills when a later day's trading reaches that price.`
+        : `Filled: ${r.side} ${r.qty} ${r.symbol} at ${fmt.money(r.price, r.currency)}`);
       render();
     } catch (ex) { err.textContent = ex.message; }
   }
   ok.textContent = sessionStorage.getItem("ql_fill") || ""; sessionStorage.removeItem("ql_fill");
   const symIn = h("input", { name: "symbol", value: state.symbol, required: true });
   const qtyIn = h("input", { name: "qty", type: "number", min: 1, step: 1, value: 10, required: true });
-  const ticket = h("form", { class: "fields", onsubmit: (e) => { e.preventDefault(); order(symIn.value, e.submitter.value, qtyIn.value); } },
-    h("label", {}, "Ticker", symIn), h("label", {}, "Shares", qtyIn),
+  const priceIn = h("input", { name: "price", type: "number", min: 0, step: "any", disabled: true, placeholder: "not needed" });
+  const typeSel = h("select", { name: "type", onchange: () => { const m = typeSel.value === "market"; priceIn.disabled = m; priceIn.required = !m; priceIn.placeholder = m ? "not needed" : "trigger price"; if (m) priceIn.value = ""; } },
+    h("option", { value: "market" }, "Market (fill now)"), h("option", { value: "limit" }, "Limit (this price or better)"), h("option", { value: "stop" }, "Stop (once price passes this)"));
+  const slIn = h("input", { name: "sl", type: "number", min: 0, step: "any", placeholder: "optional" }), tpIn = h("input", { name: "tp", type: "number", min: 0, step: "any", placeholder: "optional" });
+  const ticket = h("form", { class: "fields", onsubmit: (e) => {
+    e.preventDefault();
+    const buy = e.submitter.value === "buy";
+    order(symIn.value, e.submitter.value, qtyIn.value, { order_type: typeSel.value, price: priceIn.value ? +priceIn.value : null,
+      stop_loss: buy && slIn.value ? +slIn.value : null, take_profit: buy && tpIn.value ? +tpIn.value : null });
+  } },
+    h("label", {}, "Ticker", symIn), h("label", {}, "Shares", qtyIn), h("label", {}, "Order type", typeSel), h("label", {}, "Price", priceIn),
+    h("label", {}, "Stop-loss (buys)", slIn), h("label", {}, "Take-profit (buys)", tpIn),
     h("button", { type: "submit", value: "buy", class: "primary" }, "Buy"), h("button", { type: "submit", value: "sell" }, "Sell"));
 
   const books = acct.books.map((b) => h("section", { class: "card" }, h("h2", {}, `${b.currency} account`),
@@ -672,7 +987,12 @@ async function paperView() {
   return [
     h("div", { class: "grid-even" }, books),
     h("section", { class: "card" }, h("h2", {}, "Stock order ticket"), ticket, err, ok,
-      h("p", { class: "muted small" }, "Simulated stock orders fill at the latest delayed price with 5 bps slippage and 5 bps commission. To trade options, open a ticker's Options screen.")),
+      h("p", { class: "muted small" }, "Market orders fill now at the latest delayed price (5 bps slippage, 5 bps commission). Limit and stop orders wait and are checked against each later day's high and low. Adding a stop-loss or take-profit to a buy places those sell orders once it fills; whichever triggers first cancels the other. To trade options, open a ticker's Options screen.")),
+    orders.length ? h("section", { class: "card" }, h("h2", {}, "Open orders"),
+      table([{ t: "Placed", l: 1 }, { t: "Symbol", l: 1 }, { t: "Order", l: 1 }, "Shares", "Price", { t: "Note", l: 1 }, ""], orders.map((o) => h("tr", {},
+        h("td", {}, o.created), h("td", { class: "l" }, o.symbol), h("td", { class: "l" }, `${o.side} ${o.type}`), h("td", { class: "num" }, fmt.int(o.qty)), h("td", { class: "num" }, fmt.num(o.price)),
+        h("td", { class: "l" }, [o.note, o.stop_loss ? `stop-loss ${fmt.num(o.stop_loss)}` : null, o.take_profit ? `take-profit ${fmt.num(o.take_profit)}` : null].filter(Boolean).join(", ")),
+        h("td", {}, h("button", { onclick: async () => { await api("/paper/orders/" + o.id, { method: "DELETE" }); render(); } }, "Cancel")))))) : null,
     h("section", { class: "card" }, h("h2", {}, "Stock positions"),
       table(["Symbol", "Shares", "Avg cost", "Last", "Value", "Unrealised P&L", "Beta", ""], positions, { empty: "No open positions." })),
     h("section", { class: "card" }, h("div", { class: "row between" }, h("h2", {}, "Option positions"),
@@ -759,7 +1079,7 @@ async function assistantView() {
     h("p", { class: "muted small" }, `Answers come from Claude (${status.model}) using this app's delayed data${status.web_search ? " and web search" : ""}. They are research help, not financial advice, and each question is billed to your Anthropic API key.`));
 }
 
-const VIEWS = { dashboard: dashboardView, ideas: ideasView, portfolio: portfolioView, research: researchView, options: optionsView, backtest: backtestView, paper: paperView, assistant: assistantView };
+const VIEWS = { dashboard: dashboardView, ideas: ideasView, portfolio: portfolioView, research: researchView, options: optionsView, backtest: backtestView, paper: paperView, holdings: holdingsView, assistant: assistantView };
 
 // ---------------------------------------------------------------- startup
 function showLogin() { $("#login").hidden = false; $("#login-password").focus(); }

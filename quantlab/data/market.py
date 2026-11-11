@@ -88,6 +88,9 @@ class YahooProvider:
     def fundamentals(self, symbol: str) -> dict:
         import yfinance as yf
 
+        import logging
+
+        logging.getLogger("yfinance").setLevel(logging.CRITICAL)  # funds have no company data; it logs a 404
         t = yf.Ticker(symbol)
         i = t.info or {}
         try:

@@ -13,8 +13,8 @@ def _env(name: str, default: str) -> str:
 @dataclass
 class Settings:
     data_dir: Path = field(default_factory=lambda: Path(_env("DATA_DIR", "data")))
-    # When set, the web app requires this password. Always set it before
-    # exposing the app on a public domain.
+    # Optional: when set, the web app requires this password. Not needed for
+    # local use, where only this computer can reach the app.
     password: str = field(default_factory=lambda: _env("PASSWORD", ""))
     # Annual risk-free rates used for Sharpe ratios and option pricing.
     risk_free_usd: float = field(default_factory=lambda: float(_env("RISK_FREE_USD", "0.04")))
@@ -23,6 +23,10 @@ class Settings:
     paper_start_cash: float = field(default_factory=lambda: float(_env("PAPER_START_CASH", "100000")))
     paper_slippage_bps: float = field(default_factory=lambda: float(_env("PAPER_SLIPPAGE_BPS", "5")))
     paper_commission_bps: float = field(default_factory=lambda: float(_env("PAPER_COMMISSION_BPS", "5")))
+    paper_option_fee: float = field(default_factory=lambda: float(_env("PAPER_OPTION_FEE", "0.65")))  # per contract
+    # Assistant (chat). Needs an Anthropic API key in ANTHROPIC_API_KEY.
+    chat_model: str = field(default_factory=lambda: _env("CHAT_MODEL", "claude-opus-5-5"))
+    chat_web_search: bool = field(default_factory=lambda: _env("CHAT_WEB_SEARCH", "") in ("1", "true", "yes"))
     # How long fetched prices / news are reused before refetching (seconds).
     price_ttl: int = field(default_factory=lambda: int(_env("PRICE_TTL", "600")))
     news_ttl: int = field(default_factory=lambda: int(_env("NEWS_TTL", "1800")))

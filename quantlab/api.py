@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import __version__, backtest, paper, signals
+from . import __version__, backtest, chat, paper, signals
 from .analytics import indicators as ind
 from .analytics import options as opt
 from .analytics import risk
@@ -83,7 +83,10 @@ async def require_login(request: Request, call_next):
     if settings.password and path.startswith("/api/") and path not in open_paths:
         if not _valid_session(request.cookies.get(SESSION_COOKIE)):
             return JSONResponse({"detail": "Login required"}, status_code=401)
-    return await call_next(request)
+    response = await call_next(request)
+    # A private tool: ask search engines not to index or follow any of it.
+    response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+    return response
 
 
 @app.exception_handler(market.DataError)
@@ -315,6 +318,24 @@ def paper_order(b: OrderBody):
         raise HTTPException(400, str(exc))
 
 
+class OptionOrderBody(BaseModel):
+    symbol: str
+    expiry: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    strike: float = Field(gt=0)
+    kind: str
+    side: str
+    contracts: float
+    note: str = ""
+
+
+@app.post("/api/paper/options/orders")
+def paper_option_order(b: OptionOrderBody):
+    try:
+        return clean(paper.place_option_order(b.symbol, b.expiry, b.strike, b.kind, b.side, b.contracts, b.note))
+    except paper.OrderError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @app.get("/api/paper/trades")
 def paper_trades():
     return clean(paper.trades())
@@ -331,7 +352,45 @@ def signals_performance(horizon: int = 5):
     return clean(signals.signal_performance(max(1, min(horizon, 60))))
 
 
+# ---------------------------------------------------------------- assistant
+
+class ChatMessage(BaseModel):
+    role: str = Field(pattern="^(user|assistant)$")
+    content: str
+
+
+class ChatBody(BaseModel):
+    messages: list[ChatMessage] = Field(min_length=1, max_length=200)
+    viewing: str | None = Field(default=None, max_length=15)
+
+
+@app.get("/api/chat/status")
+def chat_status():
+    return {"enabled": chat.is_enabled(), "model": settings.chat_model, "web_search": settings.chat_web_search}
+
+
+@app.post("/api/chat")
+def chat_reply(b: ChatBody):
+    viewing = None
+    if b.viewing:
+        try:
+            viewing = market.normalize_symbol(b.viewing)
+        except market.DataError:
+            pass
+    try:
+        return chat.reply([m.model_dump() for m in b.messages], viewing)
+    except chat.ChatError as exc:
+        raise HTTPException(503, str(exc))
+
+
 # ---------------------------------------------------------------- web app
+
+@app.get("/robots.txt", include_in_schema=False)
+def robots():
+    from fastapi.responses import PlainTextResponse
+
+    return PlainTextResponse("User-agent: *\nDisallow: /\n")
+
 
 @app.get("/")
 def index():

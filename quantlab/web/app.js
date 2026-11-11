@@ -29,7 +29,7 @@ function h(tag, attrs, ...kids) {
 async function api(path, opts = {}) {
   const init = { method: opts.method || "GET", headers: {} };
   if (opts.body) { init.method = opts.method || "POST"; init.body = JSON.stringify(opts.body); init.headers["Content-Type"] = "application/json"; }
-  const res = await fetch("/api" + path, init);
+  const res = await fetch("api" + path, init)  // relative, so the app also works under a sub-path like /quantlab/;
   if (res.status === 401 && path !== "/login") { showLogin(); throw new Error("Please log in."); }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -322,6 +322,37 @@ function calculator(spot, vol, rate) {
     form, err, out);
 }
 
+/** Paper-trading ticket for one expiry. `pick(strike, kind)` loads a contract from the chain table. */
+function optionTicket(sym, expiry, calls, puts, strikes, summary) {
+  const err = h("p", { class: "error", role: "alert" }), ok = h("p", { class: "small up", role: "status" });
+  const est = h("p", { class: "muted small" });
+  const kindSel = h("select", { name: "kind", onchange: update }, h("option", { value: "call" }, "Call"), h("option", { value: "put" }, "Put"));
+  const strikeSel = h("select", { name: "strike", onchange: update }, strikes.map((k) => h("option", { value: k }, fmt.num(k))));
+  const qty = h("input", { name: "contracts", type: "number", min: 1, step: 1, value: 1, required: true, oninput: update });
+  if (summary.atm_strike != null) strikeSel.value = summary.atm_strike;
+  function update() {
+    const o = (kindSel.value === "call" ? calls : puts).get(+strikeSel.value);
+    if (!o) { est.textContent = "This contract is not listed for this expiry."; return; }
+    const px = o.quoted ? o.ask : o.last, n = Math.max(1, +qty.value || 1);
+    est.textContent = px > 0
+      ? `Buying fills at ${fmt.num(px)} per share (${o.quoted ? "the ask" : "last trade; no live quote"}), about ${fmt.num(px * 100 * n)} for ${n} contract${n > 1 ? "s" : ""}. Breakeven at expiry: ${fmt.num(kindSel.value === "call" ? +strikeSel.value + px : +strikeSel.value - px)}.`
+      : "No bid/ask or last trade for this contract right now, so it cannot be filled.";
+  }
+  const form = h("form", { class: "fields", onsubmit: async (e) => {
+    e.preventDefault(); err.textContent = ""; ok.textContent = "";
+    try {
+      const r = await api("/paper/options/orders", { body: { symbol: sym, expiry, strike: +strikeSel.value, kind: kindSel.value, side: e.submitter.value, contracts: +qty.value } });
+      ok.textContent = `Filled: ${r.side} ${r.contracts} × ${r.contract} at ${fmt.money(r.price, r.currency)} (${r.fill_source}). See it under Paper trading.`;
+    } catch (ex) { err.textContent = ex.message; }
+  } },
+    h("label", {}, "Type", kindSel), h("label", {}, "Strike", strikeSel), h("label", {}, "Contracts", qty),
+    h("button", { type: "submit", value: "buy", class: "primary" }, "Buy to open"), h("button", { type: "submit", value: "sell" }, "Sell to close"));
+  update();
+  const el = h("section", { class: "card" }, h("h2", {}, `Paper trade ${sym} options, expiring ${expiry}`), form, est, err, ok,
+    h("p", { class: "muted small" }, "Simulated money. One contract covers 100 shares. Buys fill at the ask and sells at the bid; when there is no live quote, both use the last traded price. You can buy calls and puts and sell what you hold; writing options is not simulated."));
+  return { el, pick(strike, kind) { strikeSel.value = strike; kindSel.value = kind; update(); el.scrollIntoView({ behavior: "smooth", block: "center" }); } };
+}
+
 async function optionsView() {
   const sym = state.symbol;
   const [exp, hist] = await Promise.all([api("/options/expiries?symbol=" + encodeURIComponent(sym)), api(`/history?symbol=${encodeURIComponent(sym)}&years=0.25`)]);
@@ -349,7 +380,11 @@ async function optionsView() {
         const xs = o ? [fmt.int(o.open_interest), fmt.int(o.volume), fmt.pct(o.iv), fmt.num(o.delta, 2), fmt.num(o.bid), fmt.num(o.ask)] : Array(6).fill(dash);
         return (mirror ? xs.reverse() : xs).map((x) => h("td", { class: "num" + (itm ? " itm" : "") }, x));
       };
-      const rows = strikes.map((k) => h("tr", {}, cells(calls.get(k), k < s.spot, false), h("td", { class: "strike num" }, fmt.num(k)), cells(puts.get(k), k > s.spot, true)));
+      const ticket = optionTicket(sym, expiry, calls, puts, strikes, s);
+      const rows = strikes.map((k) => h("tr", { class: "click", title: "Click to load this strike into the order ticket", onclick: (e) => {
+        const cell = e.target.closest("td"), i = cell ? [...cell.parentNode.children].indexOf(cell) : 0;
+        ticket.pick(k, i > 6 ? "put" : "call");
+      } }, cells(calls.get(k), k < s.spot, false), h("td", { class: "strike num" }, fmt.num(k)), cells(puts.get(k), k > s.spot, true)));
       const cols = ["OI", "Vol", "IV", "Delta", "Bid", "Ask"];
       const all = [...c.calls, ...c.puts], live = all.filter((o) => o.quoted).length;
       fill(body,
@@ -361,6 +396,7 @@ async function optionsView() {
           tile("Put/call open interest", fmt.num(s.put_call_oi), s.put_call_oi == null ? "" : s.put_call_oi > 1 ? "more puts outstanding" : "more calls outstanding"),
           tile("Max pain", fmt.num(s.max_pain)),
           tile("Skew", s.skew == null ? dash : fmt.snum(s.skew * 100, 1) + " pts", "5% OTM put IV − call IV")),
+        ticket.el,
         h("section", { class: "card" }, h("h2", {}, "Implied volatility by strike"), smileChart(c.calls, c.puts, s.spot)),
         h("section", { class: "card" }, h("div", { class: "row between" }, h("h2", {}, "Chain"), h("span", { class: "muted small" }, "Calls left, puts right · shaded = in the money")),
           table([...cols, { t: "Strike" }, ...cols.slice().reverse()], rows, { scroll: true })));
@@ -452,7 +488,7 @@ async function paperView() {
 
   const books = acct.books.map((b) => h("section", { class: "card" }, h("h2", {}, `${b.currency} account`),
     h("div", { class: "tiles" }, tile("Equity", fmt.num(b.equity), h("span", {}, signed(b.pnl, `${fmt.snum(b.pnl)} (${fmt.spct(b.pnl_pct, 2)})`))),
-      tile("Cash", fmt.num(b.cash)), tile("Invested", fmt.num(b.invested)), tile("Portfolio beta", fmt.num(b.beta), "cash counts as 0"))));
+      tile("Cash", fmt.num(b.cash)), tile("Invested", fmt.num(b.invested)), tile("Portfolio beta", fmt.num(b.beta), "options at delta exposure"))));
 
   const positions = acct.positions.map((p) => h("tr", {},
     h("td", {}, h("button", { class: "link", onclick: () => go("research", p.symbol) }, p.symbol)),
@@ -461,12 +497,33 @@ async function paperView() {
     h("td", { class: "num" }, fmt.num(p.beta)),
     h("td", {}, h("button", { onclick: () => order(p.symbol, "sell", p.qty) }, "Close"))));
 
+  const optErr = h("p", { class: "error", role: "alert" });
+  const optionRows = acct.options.map((o) => h("tr", {},
+    h("td", {}, h("button", { class: "link", onclick: () => go("options", o.symbol) }, o.label)),
+    h("td", { class: "num" }, fmt.int(o.qty)), h("td", { class: "num" }, fmt.num(o.avg_cost)),
+    h("td", { class: "num", title: "Priced from: " + o.mark_source }, fmt.num(o.mark)),
+    h("td", { class: "num" }, fmt.money(o.value, o.currency)), h("td", {}, signed(o.pnl, `${fmt.snum(o.pnl)} (${fmt.spct(o.pnl_pct)})`)),
+    h("td", { class: "num" }, o.delta_shares == null ? dash : fmt.snum(o.delta_shares, 0)), h("td", { class: "num" }, o.days_left),
+    h("td", {}, h("button", { onclick: async () => {
+      optErr.textContent = "";
+      try {
+        const r = await api("/paper/options/orders", { body: { symbol: o.symbol, expiry: o.expiry, strike: o.strike, kind: o.kind, side: "sell", contracts: o.qty } });
+        sessionStorage.setItem("ql_fill", `Filled: sell ${r.contracts} × ${r.contract} at ${fmt.money(r.price, r.currency)}`); render();
+      } catch (ex) { optErr.textContent = ex.message; }
+    } }, "Close"))));
+
   return [
     h("div", { class: "grid-even" }, books),
-    h("section", { class: "card" }, h("h2", {}, "Order ticket"), ticket, err, ok,
-      h("p", { class: "muted small" }, "Simulated market orders fill at the latest delayed price with 5 bps slippage and 5 bps commission. Long stock positions only.")),
-    h("section", { class: "card" }, h("h2", {}, "Positions"),
+    h("section", { class: "card" }, h("h2", {}, "Stock order ticket"), ticket, err, ok,
+      h("p", { class: "muted small" }, "Simulated stock orders fill at the latest delayed price with 5 bps slippage and 5 bps commission. To trade options, open a ticker's Options screen.")),
+    h("section", { class: "card" }, h("h2", {}, "Stock positions"),
       table(["Symbol", "Shares", "Avg cost", "Last", "Value", "Unrealised P&L", "Beta", ""], positions, { empty: "No open positions." })),
+    h("section", { class: "card" }, h("div", { class: "row between" }, h("h2", {}, "Option positions"),
+        h("button", { onclick: () => go("options", state.symbol) }, "Open option chain")),
+      table([{ t: "Contract", l: 1 }, "Contracts", "Avg cost", "Mark", "Value", "Unrealised P&L", "Delta (shares)", "Days left", ""], optionRows,
+        { empty: "No open option positions. Buy calls or puts from the Options screen." }),
+      acct.options.some((o) => o.mark_source !== "live quote") ? h("p", { class: "muted small" }, "Some marks use the last traded price or intrinsic value because there is no live quote right now; hover a mark to see which.") : null,
+      optErr),
     h("div", { class: "grid-even" },
       h("section", { class: "card" }, h("h2", {}, "Trade history"),
         table([{ t: "Time", l: 1 }, { t: "Symbol", l: 1 }, { t: "Side", l: 1 }, "Shares", "Price", "Realised P&L"], trades.map((t) => h("tr", {},
@@ -484,7 +541,68 @@ async function paperView() {
   ];
 }
 
-const VIEWS = { dashboard: dashboardView, research: researchView, options: optionsView, backtest: backtestView, paper: paperView };
+// ---------------------------------------------------------------- assistant
+const chat = { messages: [], busy: false };
+
+/** Render the assistant's plain-text reply: paragraphs, "- " bullets and **bold**, built as DOM nodes (never innerHTML). */
+function renderReply(text) {
+  const inline = (line) => line.split(/(\*\*[^*]+\*\*)/).map((part) => /^\*\*[^*]+\*\*$/.test(part) ? h("strong", {}, part.slice(2, -2)) : part);
+  const out = []; let list = null;
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    const bullet = /^[-*•]\s+/.test(line);
+    if (bullet) { if (!list) out.push((list = h("ul", {}))); list.append(h("li", {}, inline(line.replace(/^[-*•]\s+/, "")))); continue; }
+    list = null;
+    if (line) out.push(h("p", {}, inline(line.replace(/^#+\s*/, ""))));
+  }
+  return out;
+}
+
+async function assistantView() {
+  const status = await api("/chat/status");
+  if (!status.enabled) {
+    return h("section", { class: "card" }, h("h2", {}, "Assistant"),
+      h("p", { class: "notice" }, "The assistant needs an Anthropic API key. Create one at console.anthropic.com, set it as the ANTHROPIC_API_KEY environment variable where QuantLab runs, and restart. Questions are billed to that key."));
+  }
+  const log = h("div", { class: "chat-log", "aria-live": "polite" });
+  const input = h("textarea", { rows: 2, placeholder: `Ask about ${state.symbol}, your watchlist, an option, or your paper account…`, "aria-label": "Your question" });
+  const send = h("button", { type: "submit", class: "primary" }, "Send");
+  const examples = [`What's the signal on ${state.symbol} and what is driving it?`, "Which names on my watchlist look strongest right now?",
+    `What move are options pricing in for ${state.symbol} over the next month?`, "How is my paper account doing?"];
+  function draw() {
+    fill(log, chat.messages.length ? chat.messages.map((m) => h("div", { class: "msg " + m.role },
+        h("div", { class: "who" }, m.role === "user" ? "You" : "Assistant"),
+        m.role === "user" ? h("p", {}, m.content) : renderReply(m.content),
+        m.tools && m.tools.length ? h("div", { class: "muted small" }, "Looked up: " + [...new Set(m.tools)].map((t) => t.replace(/^get_/, "").replace(/_/g, " ")).join(", ")) : null,
+        m.error ? h("p", { class: "error" }, m.error) : null))
+      : h("div", { class: "stack" }, h("p", { class: "muted" }, "Ask a question in plain English. The assistant looks up live prices, signals, news, option chains and your paper account to answer. It cannot place trades."),
+          h("div", { class: "row" }, examples.map((q) => h("button", { type: "button", onclick: () => ask(q) }, q)))),
+      chat.busy ? h("div", { class: "msg assistant muted" }, "Looking things up…") : null);
+    log.scrollTop = log.scrollHeight;
+    send.disabled = chat.busy;
+  }
+  async function ask(text) {
+    text = text.trim();
+    if (!text || chat.busy) return;
+    chat.messages.push({ role: "user", content: text }); chat.busy = true; input.value = ""; draw();
+    try {
+      const sendable = chat.messages.filter((m) => !m.error).map(({ role, content }) => ({ role, content }));
+      const r = await api("/chat", { body: { messages: sendable, viewing: state.symbol } });
+      chat.messages.push({ role: "assistant", content: r.reply, tools: r.tools_used });
+    } catch (ex) { chat.messages.at(-1).error = ex.message + " Your question was not answered; send it again to retry."; }
+    chat.busy = false; draw();
+  }
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(input.value); } });
+  draw();
+  onMount(() => input.focus());
+  return h("section", { class: "card chat" },
+    h("div", { class: "row between" }, h("h2", {}, "Assistant"),
+      h("button", { onclick: () => { chat.messages = []; draw(); } }, "Clear conversation")),
+    log, h("form", { class: "chat-form", onsubmit: (e) => { e.preventDefault(); ask(input.value); } }, input, send),
+    h("p", { class: "muted small" }, `Answers come from Claude (${status.model}) using this app's delayed data${status.web_search ? " and web search" : ""}. They are research help, not financial advice, and each question is billed to your Anthropic API key.`));
+}
+
+const VIEWS = { dashboard: dashboardView, research: researchView, options: optionsView, backtest: backtestView, paper: paperView, assistant: assistantView };
 
 // ---------------------------------------------------------------- startup
 function showLogin() { $("#login").hidden = false; $("#login-password").focus(); }

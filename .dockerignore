@@ -1,6 +1,0 @@
-.git
-/data
-tests
-__pycache__
-*.egg-info
-.env

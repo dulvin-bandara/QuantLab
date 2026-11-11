@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import __version__, backtest, chat, paper, signals
+from . import __version__, backtest, chat, ideas, paper, signals
 from .analytics import indicators as ind
 from .analytics import options as opt
 from .analytics import risk
@@ -350,6 +350,21 @@ def paper_reset():
 @app.get("/api/signals/performance")
 def signals_performance(horizon: int = 5):
     return clean(signals.signal_performance(max(1, min(horizon, 60))))
+
+
+# ---------------------------------------------------------------- ideas
+
+@app.get("/api/ideas")
+def ideas_status():
+    return ideas.status()
+
+
+@app.post("/api/ideas/scan")
+def ideas_scan(market_name: str = "ALL"):
+    markets = list(ideas.UNIVERSES) if market_name.upper() == "ALL" else [market_name.upper()]
+    if any(m not in ideas.UNIVERSES for m in markets):
+        raise HTTPException(400, "Market must be US, ASX or ALL.")
+    return {"started": ideas.start_scan(markets)}
 
 
 # ---------------------------------------------------------------- assistant

@@ -27,6 +27,9 @@ class FakeProvider:
             raise DataError("No price data found for NOPE")
         return make_prices(seed=sum(map(ord, symbol)))
 
+    def history_bulk(self, symbols):
+        return {s: make_prices(520, seed=sum(map(ord, s))) for s in symbols if s != "NOPE"}
+
     def name(self, symbol):
         return f"{symbol} Corp"
 

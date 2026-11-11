@@ -13,7 +13,7 @@ import json
 import os
 from datetime import date
 
-from . import backtest, paper, signals
+from . import backtest, ideas, paper, signals
 from .analytics import options as opt
 from .analytics import risk
 from .config import settings
@@ -37,6 +37,8 @@ What to know about the data:
 - The signal score runs from -1 (bearish) to +1 (bullish) and blends trend, momentum, an ML \
 forecast and news sentiment. The ML forecast is only counted when it has shown out-of-sample skill; \
 for most stocks it has little or none, so say so when it matters.
+- Trade ideas come from scanning about 170 of the largest US and ASX stocks; they are a shortlist chosen \
+mostly on trend and momentum, not a forecast.
 - The paper account is simulated money.
 
 How to answer: lead with the answer, then the numbers behind it. Be direct about uncertainty and \
@@ -229,7 +231,23 @@ def get_paper_account() -> str:
     return _json({**acct, "recent_trades": paper.trades(20)})
 
 
-TOOL_FUNCTIONS = [get_watchlist, get_signal, get_price_stats, get_news, get_option_expiries, get_option_chain,
+@_safe
+def get_trade_ideas() -> str:
+    """Get the results of the most recent Ideas scan: stocks from the largest US and ASX
+    companies that the app currently rates Buy or better, ranked by score, each with reasons
+    and a stop, target and position size. Also returns the 15 strongest and 10 weakest names
+    from the price-only screen. Check `scanned_at`: if it is old, tell the owner to run a new
+    scan from the Ideas tab (you cannot start one)."""
+    res = ideas.latest()
+    if not res:
+        return "No scan has been run yet. The owner can run one from the Ideas tab."
+    keep = ("symbol", "market", "score", "price", "rsi", "ret_20", "ret_120")
+    slim = lambda rows: [{k: r[k] for k in keep} for r in rows]
+    return _json({**{k: v for k, v in res.items() if k != "table"},
+                  "strongest_screened": slim(res["table"][:15]), "weakest_screened": slim(res["table"][-10:])})
+
+
+TOOL_FUNCTIONS = [get_trade_ideas, get_watchlist, get_signal, get_price_stats, get_news, get_option_expiries, get_option_chain,
                   price_option, run_backtest, get_paper_account]
 
 

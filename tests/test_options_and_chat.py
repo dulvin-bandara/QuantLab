@@ -131,10 +131,38 @@ def test_chat_endpoint(monkeypatch):
     assert r.json() == {"reply": "AAPL is a **Buy**.", "tools_used": ["get_signal"]}
     assert seen["model"] == "claude-opus-5-5" and len(seen["messages"]) == 3
     assert "AAPL open in the app" in seen["system"][1]["text"]
-    assert len(seen["tools"]) == len(chat.TOOL_FUNCTIONS)
+    assert len(seen["tools"]) == len(chat.TOOL_FUNCTIONS) == 10
     assert client.post("/api/chat", json={"messages": [{"role": "system", "content": "x"}]}).status_code == 422
 
 
 def test_private_by_default_headers():
     assert client.get("/").headers["x-robots-tag"].startswith("noindex")
     assert "Disallow: /" in client.get("/robots.txt").text
+
+
+def test_ideas_scan_ranks_and_filters():
+    from quantlab import ideas
+
+    assert client.get("/api/ideas").json()["result"] is None
+    assert client.post("/api/ideas/scan", params={"market_name": "MARS"}).status_code == 400
+    assert ideas.start_scan(["US", "ASX"], wait=True)
+    st = client.get("/api/ideas").json()
+    res = st["result"]
+    assert st["status"] == "idle" and st["error"] is None
+    assert res["screened"] == res["universe_size"] == len(ideas.US_UNIVERSE) + len(ideas.ASX_UNIVERSE)
+    scores = [r["score"] for r in res["table"]]
+    assert scores == sorted(scores, reverse=True)
+    assert res["shortlisted"] <= 2 * ideas.SHORTLIST
+    assert res["ideas"], "random-walk test data still yields some uptrends"
+    for idea in res["ideas"]:
+        assert idea["score"] >= 0.2 and idea["label"] in ("Buy", "Strong Buy")
+        assert idea["plan"]["stop"] < idea["price"] < idea["plan"]["target"] and idea["reasons"]
+    assert json.loads(chat.get_trade_ideas())["ideas"][0]["symbol"] == res["ideas"][0]["symbol"]
+
+
+def test_universes_are_valid_unique_tickers():
+    from quantlab import ideas
+
+    for universe in ideas.UNIVERSES.values():
+        assert len(universe) == len(set(universe))
+        assert all(market.normalize_symbol(s) == s for s in universe)
